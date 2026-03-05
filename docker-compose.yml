@@ -1,0 +1,20 @@
+services:
+  medical-bot:
+    build: .
+    container_name: medical-intake-bot
+    restart: always
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - HOTLINE_PHONE=${HOTLINE_PHONE}
+      - CONSENT_DECLINE_PHONE=${CONSENT_DECLINE_PHONE}
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
