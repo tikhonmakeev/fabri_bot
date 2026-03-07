@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -198,6 +198,12 @@ def _sex_dependent_maternal_phrase(data: dict[str, Any]) -> str:
         return " по материнской линии"
     return ""
 
+def _sex_dependent_paternal_phrase(data: dict[str, Any]) -> str:
+    # Requirement 1.6: for women add "по отцовской линии".
+    sex = data.get("sex")  # "Мужской"/"Женский"
+    if sex == "Женский":
+        return " по отцовской линии"
+    return ""
 
 def _step_text_role(_: dict[str, Any]) -> str:
     return "Кто заполняет анкету?"
@@ -236,7 +242,7 @@ def _opts_yes_no_dk(_: dict[str, Any]) -> list[str]:
 
 
 def _step_text_relatives_dx(data: dict[str, Any]) -> str:
-    extra = _sex_dependent_maternal_phrase(data)
+    extra = _sex_dependent_paternal_phrase(data)
     return f"Есть ли у вас кровные родственники{extra} с диагностированной Болезнью Фабри?"
 
 
@@ -370,9 +376,9 @@ def _step_text_dizziness(_: dict[str, Any]) -> str:
 def _step_text_eyes(_: dict[str, Any]) -> str:
     return (
         "Глаза (Специфический признак)\n\n"
-        "Говорили ли вам офтальмологи о наличии специфических изменений на глазном дне "
-        "(так называемая «завитая кератопатия» или помутнение роговицы)? "
-        "(Обычно это видно только при осмотре со щелевой лампой)."
+        "Говорили ли вам офтальмологи о наличии специфических поражений роговицы "
+        "(так называемая «вихревидная кератопатия» или помутнение роговицы) "
+        "или изменении сосудов глазного дна?"
     )
 
 
@@ -527,7 +533,7 @@ def calculate_fabry_score(answers: dict[str, Any]) -> int:
     6-15: Moderate risk  
     16-30: High risk
     31+: Very high risk
-    
+    (
     Returns: integer score (0-60+)
     """
     score = 0
