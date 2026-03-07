@@ -129,6 +129,15 @@ def validate_full_name(text: str, _: dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
+def validate_phone(text: str, _: dict[str, Any]) -> tuple[bool, str]:
+    t = _normalize_spaces(text)
+    # Lightweight phone presence check (Russia-style +7/8 or digits).
+    digits = re.sub(r"\D", "", t)
+    if len(digits) < 10:
+        return False, "Не вижу номера телефона. Можно в формате +7XXXXXXXXXX или 8XXXXXXXXXX."
+    return True, ""
+
+
 def hotline_keyboard_row(builder: InlineKeyboardBuilder) -> None:
     builder.row(
         InlineKeyboardButton(
@@ -422,6 +431,13 @@ def _step_text_full_name(_: dict[str, Any]) -> str:
     return "Укажите пожалуйста ваше ФИО (Фамилия Имя Отчество):"
 
 
+def _step_text_phone(_: dict[str, Any]) -> str:
+    return (
+        "Укажите пожалуйста ваш номер телефона.\n"
+        "Пример: +7 999 123-45-67"
+    )
+
+
 
 
 
@@ -468,6 +484,7 @@ STEPS: list[Step] = [
     Step(key="additional_info", kind="collect", text=_step_text_additional),
     Step(key="callback_pref", kind="choice", text=_step_text_callback_pref, options=_step_opts_callback_pref),
     Step(key="full_name", kind="text", text=_step_text_full_name, validator=validate_full_name),
+    Step(key="phone", kind="text", text=_step_text_phone, validator=validate_phone),
 ]
 
 
