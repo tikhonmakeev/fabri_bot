@@ -17,7 +17,14 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
@@ -106,11 +113,11 @@ def _normalize_spaces(s: str) -> str:
 
 
 def validate_age(text: str, _: dict[str, Any]) -> tuple[bool, str]:
-    # Accept "25", "25 лет", etc. Extract first integer.
-    m = re.search(r"\d{1,3}", text)
-    if not m:
-        return False, "Пожалуйста, введите возраст числом (например: 35)."
-    age = int(m.group(0))
+    # Strict validation: only digits allowed
+    text = text.strip()
+    if not text.isdigit():
+        return False, "Пожалуйста, введите возраст только цифрами (например: 35)."
+    age = int(text)
     if age < 0 or age > 120:
         return False, "Пожалуйста, проверьте возраст (допустимый диапазон: 0–120)."
     return True, ""
@@ -122,10 +129,15 @@ def validate_nonempty(text: str, _: dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
-def validate_contact(text: str, _: dict[str, Any]) -> tuple[bool, str]:
+def validate_full_name(text: str, _: dict[str, Any]) -> tuple[bool, str]:
     t = _normalize_spaces(text)
-    if len(t) < 5:
-        return False, "Пожалуйста, укажите имя и номер телефона (или хотя бы номер)."
+    if len(t) < 2:
+        return False, "Пожалуйста, укажите ваше ФИО."
+    return True, ""
+
+
+def validate_phone(text: str, _: dict[str, Any]) -> tuple[bool, str]:
+    t = _normalize_spaces(text)
     # Lightweight phone presence check (Russia-style +7/8 or digits).
     digits = re.sub(r"\D", "", t)
     if len(digits) < 10:
@@ -166,6 +178,14 @@ def text_keyboard() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     hotline_keyboard_row(kb)
     return kb
+
+
+def phone_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with 'Share phone number' button."""
+    kb = [
+        [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
 
 
 def collect_keyboard(step_index: int) -> InlineKeyboardBuilder:
@@ -402,6 +422,13 @@ def _is_doctor(data: dict[str, Any]) -> bool:
     return data.get("role") == "Врач (представитель пациента)"
 
 
+def _has_no_fabry_diagnosis(data: dict[str, Any]) -> bool:
+    """Return True if detailed medical questions should be asked.
+    Skip medical questions if Fabry is already confirmed."""
+    answers = data.get("answers", {})
+    return answers.get("fabry_confirmed") != "Да"
+
+
 def _step_text_additional(_: dict[str, Any]) -> str:
     return (
         "Имеются ли у вас дополнительные сведения, результаты анализов, которые вы хотите указать?\n\n"
@@ -422,14 +449,19 @@ def _wants_callback(data: dict[str, Any]) -> bool:
     return data.get("callback_pref") == "Да, я жду обратного звонка"
 
 
-def _step_text_contact(_: dict[str, Any]) -> str:
+def _step_text_full_name(_: dict[str, Any]) -> str:
+    return "Укажите пожалуйста ваше ФИО (Фамилия Имя Отчество):"
+
+
+def _step_text_phone(_: dict[str, Any]) -> str:
     return (
-        "Укажите пожалуйста Ваше имя и номер телефона.\n"
-        "Пример: Иван, +7 999 123-45-67"
+        "Укажите пожалуйста ваш номер телефона.\n"
+        "Пример: +7 999 123-45-67\n\n"
+        "Или нажмите кнопку 'Поделиться номером' ниже."
     )
 
 
-def _should_ask_contact(data: dict[str, Any]) -> bool:
+def _should_ask_phone(data: dict[str, Any]) -> bool:
     return _wants_callback(data)
 
 
@@ -455,27 +487,31 @@ STEPS: list[Step] = [
     Step(key="sex", kind="choice", text=_step_text_sex, options=_step_options_sex),
     Step(key="age", kind="text", text=_step_text_age, validator=validate_age),
     Step(key="fabry_confirmed", kind="choice", text=_step_text_genetic, options=_opts_yes_no),
-    Step(key="relatives_fabry", kind="choice", text=_step_text_relatives_dx, options=_opts_yes_no_dk),
-    Step(key="relatives_kidney_heart_stroke", kind="choice", text=_step_text_relatives_kidney_heart_stroke, options=_opts_yes_no_dk),
-    Step(key="pain_hands_feet", kind="choice", text=_step_text_pain, options=_step_opts_pain),
-    Step(key="pain_triggers", kind="choice", text=_step_text_crises, options=_opts_yes_no, condition=_should_ask_pain_triggers),
-    Step(key="sweating", kind="choice", text=_step_text_sweating, options=_step_opts_sweating),
-    Step(key="gi_after_meals", kind="choice", text=_step_text_gi, options=_step_opts_gi),
-    Step(key="early_satiety", kind="choice", text=_step_text_satiety, options=_step_opts_satiety),
-    Step(key="angiokeratomas", kind="choice", text=_step_text_skin, options=_step_opts_skin),
-    Step(key="tachycardia", kind="choice", text=_step_text_tachy, options=_opts_yes_no),
-    Step(key="dyspnea", kind="choice", text=_step_text_dyspnea, options=_opts_yes_no),
-    Step(key="edema", kind="choice", text=_step_text_edema, options=_opts_yes_no),
-    Step(key="proteinuria_creatinine", kind="choice", text=_step_text_proteinuria, options=_step_opts_proteinuria),
-    Step(key="hearing_tinnitus", kind="choice", text=_step_text_hearing, options=_step_opts_hearing),
-    Step(key="dizziness", kind="choice", text=_step_text_dizziness, options=_opts_yes_no),
-    Step(key="eye_sign", kind="choice", text=_step_text_eyes, options=_step_opts_eyes),
+    # Medical questions - skip if Fabry is already confirmed
+    Step(key="relatives_fabry", kind="choice", text=_step_text_relatives_dx, options=_opts_yes_no_dk, condition=_has_no_fabry_diagnosis),
+    Step(key="relatives_kidney_heart_stroke", kind="choice", text=_step_text_relatives_kidney_heart_stroke, options=_opts_yes_no_dk, condition=_has_no_fabry_diagnosis),
+    Step(key="pain_hands_feet", kind="choice", text=_step_text_pain, options=_step_opts_pain, condition=_has_no_fabry_diagnosis),
+    Step(key="pain_triggers", kind="choice", text=_step_text_crises, options=_opts_yes_no, condition=lambda d: _has_no_fabry_diagnosis(d) and _should_ask_pain_triggers(d)),
+    Step(key="sweating", kind="choice", text=_step_text_sweating, options=_step_opts_sweating, condition=_has_no_fabry_diagnosis),
+    Step(key="gi_after_meals", kind="choice", text=_step_text_gi, options=_step_opts_gi, condition=_has_no_fabry_diagnosis),
+    Step(key="early_satiety", kind="choice", text=_step_text_satiety, options=_step_opts_satiety, condition=_has_no_fabry_diagnosis),
+    Step(key="angiokeratomas", kind="choice", text=_step_text_skin, options=_step_opts_skin, condition=_has_no_fabry_diagnosis),
+    Step(key="tachycardia", kind="choice", text=_step_text_tachy, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="dyspnea", kind="choice", text=_step_text_dyspnea, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="edema", kind="choice", text=_step_text_edema, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="proteinuria_creatinine", kind="choice", text=_step_text_proteinuria, options=_step_opts_proteinuria, condition=_has_no_fabry_diagnosis),
+    Step(key="hearing_tinnitus", kind="choice", text=_step_text_hearing, options=_step_opts_hearing, condition=_has_no_fabry_diagnosis),
+    Step(key="dizziness", kind="choice", text=_step_text_dizziness, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="eye_sign", kind="choice", text=_step_text_eyes, options=_step_opts_eyes, condition=_has_no_fabry_diagnosis),
+    # Location and professional info
     Step(key="city", kind="text", text=_step_text_city, validator=validate_nonempty),
     Step(key="specialization_position", kind="text", text=_step_text_spec, condition=_is_doctor, validator=validate_nonempty),
     Step(key="workplace", kind="text", text=_step_text_workplace, condition=_is_doctor, validator=validate_nonempty),
     Step(key="additional_info", kind="collect", text=_step_text_additional),
     Step(key="callback_pref", kind="choice", text=_step_text_callback_pref, options=_step_opts_callback_pref),
-    Step(key="contact", kind="text", text=_step_text_contact, condition=_should_ask_contact, validator=validate_contact),
+    # Contact info - always collect full name, phone only if callback requested
+    Step(key="full_name", kind="text", text=_step_text_full_name, validator=validate_full_name),
+    Step(key="phone", kind="text", text=_step_text_phone, condition=_should_ask_phone, validator=validate_phone),
 ]
 
 
@@ -515,7 +551,11 @@ async def send_step(message: Message, state: FSMContext) -> None:
         markup = choice_keyboard(idx, opts).as_markup()
         await state.set_state(SurveyFSM.waiting_choice)
     elif step.kind == "text":
-        markup = text_keyboard().as_markup()
+        # Use special keyboard for phone with "Share number" button
+        if step.key == "phone":
+            markup = phone_keyboard()
+        else:
+            markup = text_keyboard().as_markup()
         await state.set_state(SurveyFSM.waiting_text)
     else:
         markup = collect_keyboard(idx).as_markup()
@@ -829,22 +869,51 @@ async def wrong_input_in_choice(message: Message, state: FSMContext) -> None:
 
 @router.message(SurveyFSM.waiting_text)
 async def text_answer(message: Message, state: FSMContext) -> None:
-    if message.text is None:
-        await message.answer(
-            "Пожалуйста, отправьте ответ текстом.",
-            reply_markup=text_keyboard().as_markup(),
-        )
-        return
-
     data = await state.get_data()
     idx = data.get("step_index", 0)
     step = step_by_index(idx)
+
+    # Handle contact sharing for phone step
+    if step.key == "phone" and message.contact:
+        phone_number = message.contact.phone_number
+        answers = dict(data.get("answers", {}))
+        answers[step.key] = phone_number
+        await state.update_data(answers=answers)
+        
+        # Remove reply keyboard and proceed
+        await message.answer("✅ Спасибо! Номер телефона получен.", reply_markup=ReplyKeyboardRemove())
+        
+        new_data = await state.get_data()
+        nxt = next_step_index(idx + 1, new_data)
+        if nxt is None:
+            await finish_survey(message, state)
+            return
+        await state.update_data(step_index=nxt)
+        await send_step(message, state)
+        return
+
+    # Regular text input handling
+    if message.text is None:
+        if step.key == "phone":
+            await message.answer(
+                "Пожалуйста, отправьте номер телефона текстом или нажмите 'Поделиться номером'.",
+                reply_markup=phone_keyboard(),
+            )
+        else:
+            await message.answer(
+                "Пожалуйста, отправьте ответ текстом.",
+                reply_markup=text_keyboard().as_markup(),
+            )
+        return
 
     raw = _normalize_spaces(message.text)
     if step.validator:
         ok, err = step.validator(raw, data)
         if not ok:
-            await message.answer(err, reply_markup=text_keyboard().as_markup())
+            if step.key == "phone":
+                await message.answer(err, reply_markup=phone_keyboard())
+            else:
+                await message.answer(err, reply_markup=text_keyboard().as_markup())
             return
 
     answers = dict(data.get("answers", {}))
@@ -854,6 +923,10 @@ async def text_answer(message: Message, state: FSMContext) -> None:
     if step.key in ("role", "sex"):
         patch[step.key] = raw
     await state.update_data(**patch)
+
+    # Remove reply keyboard after phone input
+    if step.key == "phone":
+        await message.answer("✅ Номер телефона получен.", reply_markup=ReplyKeyboardRemove())
 
     new_data = await state.get_data()
     nxt = next_step_index(idx + 1, new_data)
