@@ -106,13 +106,14 @@ def _normalize_spaces(s: str) -> str:
 
 
 def validate_age(text: str, _: dict[str, Any]) -> tuple[bool, str]:
-    # Accept "25", "25 лет", etc. Extract first integer.
-    m = re.search(r"\d{1,3}", text)
-    if not m:
+    t = _normalize_spaces(text)
+    # Strip trailing "лет", "год", "года" etc.
+    cleaned = re.sub(r"\s*(лет|год[а]?)\s*$", "", t, flags=re.IGNORECASE).strip()
+    if not cleaned.isdigit():
         return False, "Пожалуйста, введите возраст числом (например: 35)."
-    age = int(m.group(0))
-    if age < 0 or age > 120:
-        return False, "Пожалуйста, проверьте возраст (допустимый диапазон: 0–120)."
+    age = int(cleaned)
+    if age < 1 or age > 120:
+        return False, "Пожалуйста, проверьте возраст (допустимый диапазон: 1–120)."
     return True, ""
 
 
@@ -126,15 +127,22 @@ def validate_full_name(text: str, _: dict[str, Any]) -> tuple[bool, str]:
     t = _normalize_spaces(text)
     if len(t) < 2:
         return False, "Пожалуйста, укажите ваше ФИО."
+    # Only letters, spaces, hyphens, dots allowed
+    if not re.match(r"^[А-Яа-яЁёA-Za-z\s.\-]+$", t):
+        return False, "ФИО может содержать только буквы, пробелы, дефисы и точки."
     return True, ""
 
 
 def validate_phone(text: str, _: dict[str, Any]) -> tuple[bool, str]:
     t = _normalize_spaces(text)
-    # Lightweight phone presence check (Russia-style +7/8 or digits).
+    # Allow only digits, +, -, (, ), spaces
+    if not re.match(r"^[\d\s+\-()\,]+$", t):
+        return False, "Номер телефона содержит недопустимые символы. Используйте только цифры, +, -, (, )."
     digits = re.sub(r"\D", "", t)
     if len(digits) < 10:
         return False, "Не вижу номера телефона. Можно в формате +7XXXXXXXXXX или 8XXXXXXXXXX."
+    if len(digits) > 15:
+        return False, "Слишком длинный номер. Проверьте, пожалуйста."
     return True, ""
 
 
@@ -187,6 +195,27 @@ async def get_data(state: FSMContext) -> dict[str, Any]:
 
 async def set_step_index(state: FSMContext, idx: int) -> None:
     await state.update_data(step_index=idx)
+
+
+async def _track_msg(state: FSMContext, *msg_ids: int) -> None:
+    """Add message IDs to the deletable list."""
+    data = await state.get_data()
+    ids = list(data.get("_del_ids", []))
+    ids.extend(msg_ids)
+    await state.update_data(_del_ids=ids)
+
+
+async def _delete_tracked(chat_id: int, state: FSMContext) -> None:
+    """Delete all tracked messages and clear the list."""
+    data = await state.get_data()
+    ids = data.get("_del_ids", [])
+    for mid in ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+    if ids:
+        await state.update_data(_del_ids=[])
 
 
 async def save_answer(state: FSMContext, key: str, value: Any) -> None:
@@ -513,8 +542,14 @@ async def send_step(message: Message, state: FSMContext) -> None:
         idx = valid_idx
         await state.update_data(step_index=idx)
 
+    # Delete previous question/answer messages
+    await _delete_tracked(message.chat.id, state)
+
+    track_ids: list[int] = []
+
     if idx in HOTLINE_REMINDERS:
-        await message.answer(HOTLINE_REMINDERS[idx])
+        reminder = await message.answer(HOTLINE_REMINDERS[idx])
+        track_ids.append(reminder.message_id)
 
     step = step_by_index(idx)
     text = step.text(data)
@@ -530,7 +565,9 @@ async def send_step(message: Message, state: FSMContext) -> None:
         markup = collect_keyboard(idx).as_markup()
         await state.set_state(SurveyFSM.collecting_additional)
 
-    await message.answer(text, reply_markup=markup)
+    sent = await message.answer(text, reply_markup=markup)
+    track_ids.append(sent.message_id)
+    await _track_msg(state, *track_ids)
 
 
 def format_summary(data: dict[str, Any]) -> str:
@@ -666,6 +703,9 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     chat_id = message.chat.id
 
+    # Delete previous question messages
+    await _delete_tracked(chat_id, state)
+
     await message.answer(
         "Спасибо за ответы! Ваши данные переданы специалисту. Ожидайте звонка в ближайшее время."
     )
@@ -750,8 +790,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "hotline")
-async def cb_hotline(callback: CallbackQuery) -> None:
-    await callback.message.answer(f"Позвоните нам по номеру: {HOTLINE_PHONE}")
+async def cb_hotline(callback: CallbackQuery, state: FSMContext) -> None:
+    sent = await callback.message.answer(f"Позвоните нам по номеру: {HOTLINE_PHONE}")
+    await _track_msg(state, sent.message_id)
     await callback.answer()
 
 
@@ -774,10 +815,11 @@ async def cb_consent(callback: CallbackQuery, state: FSMContext) -> None:
         additional_payload=[],
         step_index=0,
     )
-    await callback.message.answer("Спасибо! Начинаем анкетирование.")
+    thanks = await callback.message.answer("Спасибо! Начинаем анкетирование.")
     await callback.message.answer(
         f"📞 На любом этапе анкетирования вы можете позвонить на горячую линию: {HOTLINE_PHONE}"
     )
+    await _track_msg(state, thanks.message_id)
     await send_step(callback.message, state)
 
 
@@ -830,19 +872,21 @@ async def wrong_input_in_choice(message: Message, state: FSMContext) -> None:
     idx = data.get("step_index", 0)
     step = step_by_index(idx)
     opts = step.options(data) if step.options else []
-    await message.answer(
+    sent = await message.answer(
         "Пожалуйста, выберите вариант из предложенных кнопок ниже. 👇",
         reply_markup=choice_keyboard(idx, opts).as_markup(),
     )
+    await _track_msg(state, message.message_id, sent.message_id)
 
 
 @router.message(SurveyFSM.waiting_text)
 async def text_answer(message: Message, state: FSMContext) -> None:
     if message.text is None:
-        await message.answer(
+        sent = await message.answer(
             "Пожалуйста, отправьте ответ текстом.",
             reply_markup=text_keyboard().as_markup(),
         )
+        await _track_msg(state, message.message_id, sent.message_id)
         return
 
     data = await state.get_data()
@@ -853,8 +897,12 @@ async def text_answer(message: Message, state: FSMContext) -> None:
     if step.validator:
         ok, err = step.validator(raw, data)
         if not ok:
-            await message.answer(err, reply_markup=text_keyboard().as_markup())
+            sent = await message.answer(err, reply_markup=text_keyboard().as_markup())
+            await _track_msg(state, message.message_id, sent.message_id)
             return
+
+    # Track user message so it gets deleted with the next step
+    await _track_msg(state, message.message_id)
 
     answers = dict(data.get("answers", {}))
     answers[step.key] = raw
@@ -907,10 +955,11 @@ async def collect_additional(message: Message, state: FSMContext) -> None:
     additional.append(payload_item)
     await state.update_data(additional_payload=additional)
 
-    await message.answer(
+    sent = await message.answer(
         "Добавлено. Можете отправить еще сообщения или нажать «✅ Продолжить».",
         reply_markup=collect_keyboard(idx).as_markup(),
     )
+    await _track_msg(state, message.message_id, sent.message_id)
 
 
 @router.callback_query(SurveyFSM.collecting_additional, F.data.startswith("collect_done|"))
