@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal, Optional
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -28,7 +28,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+TEST_MODE = os.getenv("TEST_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+TEST_BOT_TOKEN = os.getenv("TEST_BOT_TOKEN", "").strip()
+TEST_GROUP_CHAT_ID_RAW = os.getenv("TEST_GROUP_CHAT_ID", "").strip()
+
+BOT_TOKEN = TEST_BOT_TOKEN if TEST_MODE else os.getenv("BOT_TOKEN", "").strip()
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Put it into .env")
 
@@ -38,10 +42,16 @@ HOTLINE_PHONE = os.getenv("HOTLINE_PHONE", "+7 (495) 123-45-67").strip()
 # Phone number shown when user declines processing consent (requirement #1)
 CONSENT_DECLINE_PHONE = os.getenv("CONSENT_DECLINE_PHONE", HOTLINE_PHONE).strip()
 
-# Group chat where completed surveys are forwarded (bot must be a member)
+# Group chat where completed surveys and logs are forwarded (bot must be a member)
 # Example: GROUP_CHAT_ID=-1001234567890
-GROUP_CHAT_ID_RAW = os.getenv("GROUP_CHAT_ID", "").strip()
+GROUP_CHAT_ID_RAW = (
+    TEST_GROUP_CHAT_ID_RAW if TEST_MODE else os.getenv("GROUP_CHAT_ID", "").strip()
+)
 GROUP_CHAT_ID: Optional[int] = int(GROUP_CHAT_ID_RAW) if GROUP_CHAT_ID_RAW else None
+LOG_CHAT_ID_RAW = (
+    TEST_GROUP_CHAT_ID_RAW if TEST_MODE else os.getenv("LOG_CHAT_ID", "").strip()
+)
+LOG_CHAT_ID: Optional[int] = int(LOG_CHAT_ID_RAW) if LOG_CHAT_ID_RAW else GROUP_CHAT_ID
 
 
 # =========================
@@ -53,6 +63,32 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("medical_intake_bot")
+logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+
+
+class TelegramLogHandler(logging.Handler):
+    """Forward application logs to Telegram group asynchronously."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not bot or not LOG_CHAT_ID:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        message = self.format(record)
+        loop.create_task(_send_log_to_group(message))
+
+
+async def _send_log_to_group(text: str) -> None:
+    if not bot or not LOG_CHAT_ID:
+        return
+    try:
+        # Telegram allows up to 4096 chars per message.
+        await bot.send_message(LOG_CHAT_ID, text[:4000])
+    except Exception:
+        # Do not recursively log handler errors.
+        pass
 
 
 # =========================
@@ -256,24 +292,41 @@ def _step_options_role(_: dict[str, Any]) -> list[str]:
     return ["Пациент", "Врач (представитель пациента)"]
 
 
-def _step_text_sex(_: dict[str, Any]) -> str:
-    return "Укажите, пожалуйста, Ваш пол:"
+def _step_text_sex(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Укажите, пожалуйста, ваш пол:",
+        "Укажите, пожалуйста, пол пациента:",
+    )
 
 
 def _step_options_sex(_: dict[str, Any]) -> list[str]:
     return ["Мужской", "Женский"]
 
 
-def _step_text_age(_: dict[str, Any]) -> str:
-    return (
+def _for_patient_or_self(data: dict[str, Any], self_text: str, patient_text: str) -> str:
+    """Use patient-oriented wording when survey is filled by a doctor."""
+    return patient_text if _is_doctor(data) else self_text
+
+
+def _step_text_age(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Укажите Ваш возраст:\n"
         "[     ] – лет\n\n"
-        "Важно: у мужчин симптомы проявляются раньше и тяжелее, у женщин – вариабельно"
+        "Важно: у мужчин симптомы проявляются раньше и тяжелее, у женщин – вариабельно",
+        "Укажите возраст пациента:\n"
+        "[     ] – лет\n\n"
+        "Важно: у мужчин симптомы проявляются раньше и тяжелее, у женщин – вариабельно",
     )
 
 
-def _step_text_genetic(_: dict[str, Any]) -> str:
-    return "Имеется ли у вас генетически подтвержденный диагноз Болезнь Фабри?"
+def _step_text_genetic(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Имеется ли у вас генетически подтвержденный диагноз Болезнь Фабри?",
+        "Имеется ли у вашего пациента генетически подтвержденный диагноз Болезнь Фабри?",
+    )
 
 
 def _opts_yes_no(_: dict[str, Any]) -> list[str]:
@@ -286,22 +339,33 @@ def _opts_yes_no_dk(_: dict[str, Any]) -> list[str]:
 
 def _step_text_relatives_dx(data: dict[str, Any]) -> str:
     extra = _sex_dependent_paternal_phrase(data)
-    return f"Есть ли у вас кровные родственники{extra} с диагностированной Болезнью Фабри?"
+    return _for_patient_or_self(
+        data,
+        f"Есть ли у вас кровные родственники{extra} с диагностированной Болезнью Фабри?",
+        f"Есть ли у вашего пациента кровные родственники{extra} с диагностированной Болезнью Фабри?",
+    )
 
 
 def _step_text_relatives_kidney_heart_stroke(data: dict[str, Any]) -> str:
     extra = _sex_dependent_maternal_phrase(data)
-    return (
+    return _for_patient_or_self(
+        data,
         f"Есть ли у вас кровные родственники{extra} с заболеваниями почек, "
-        "с заболеваниями сердца, перенесшие инсульт в молодом возрасте (до 50 лет)?"
+        "с заболеваниями сердца, перенесшие инсульт в молодом возрасте (до 50 лет)?",
+        f"Есть ли у вашего пациента кровные родственники{extra} с заболеваниями почек, "
+        "с заболеваниями сердца, перенесшие инсульт в молодом возрасте (до 50 лет)?",
     )
 
 
-def _step_text_pain(_: dict[str, Any]) -> str:
-    return (
+def _step_text_pain(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Неврологические и болевые синдромы (Акропарестезии)\n"
         "Важно: это один из самых ранних признаков\n\n"
-        "Испытываете ли вы жгучие, покалывающие или «простреливающие» боли в ладонях и стопах?"
+        "Испытываете ли вы жгучие, покалывающие или «простреливающие» боли в ладонях и стопах?",
+        "Неврологические и болевые синдромы (Акропарестезии)\n"
+        "Важно: это один из самых ранних признаков\n\n"
+        "Испытывает ли ваш пациент жгучие, покалывающие или «простреливающие» боли в ладонях и стопах?",
     )
 
 
@@ -313,17 +377,23 @@ def _step_opts_pain(_: dict[str, Any]) -> list[str]:
     ]
 
 
-def _step_text_crises(_: dict[str, Any]) -> str:
-    return (
+def _step_text_crises(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Усиливаются ли эти боли при физической нагрузке, смене погоды, стрессе "
-        "или после горячей ванны (так называемые «кризы Фабри»)?"
+        "или после горячей ванны (так называемые «кризы Фабри»)?",
+        "Усиливаются ли у пациента эти боли при физической нагрузке, смене погоды, стрессе "
+        "или после горячей ванны (так называемые «кризы Фабри»)?",
     )
 
 
-def _step_text_sweating(_: dict[str, Any]) -> str:
-    return (
+def _step_text_sweating(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Бывает ли у вас сниженное потоотделение (гипогидроз)? Например, вы почти не потеете "
-        "в спортзале или в жару, перегреваетесь?"
+        "в спортзале или в жару, перегреваетесь?",
+        "Бывает ли у вашего пациента сниженное потоотделение (гипогидроз)? Например, пациент почти не потеет "
+        "в спортзале или в жару, перегревается?",
     )
 
 
@@ -331,11 +401,15 @@ def _step_opts_sweating(_: dict[str, Any]) -> list[str]:
     return ["Да, потею очень мало", "Потею нормально", "Потею чрезмерно"]
 
 
-def _step_text_gi(_: dict[str, Any]) -> str:
-    return (
+def _step_text_gi(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Желудочно-кишечный тракт\n\n"
         "Беспокоят ли вас вздутие живота, диарея или боли в животе сразу после еды, "
-        "особенно жирной?"
+        "особенно жирной?",
+        "Желудочно-кишечный тракт\n\n"
+        "Беспокоят ли пациента вздутие живота, диарея или боли в животе сразу после еды, "
+        "особенно жирной?",
     )
 
 
@@ -343,19 +417,27 @@ def _step_opts_gi(_: dict[str, Any]) -> list[str]:
     return ["Нет", "Иногда", "Регулярно, с детства"]
 
 
-def _step_text_satiety(_: dict[str, Any]) -> str:
-    return "Ощущаете ли вы чувство быстрого насыщения (наедаетесь маленькой порцией)?"
+def _step_text_satiety(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Ощущаете ли вы чувство быстрого насыщения (наедаетесь маленькой порцией)?",
+        "Ощущает ли пациент чувство быстрого насыщения (наедается маленькой порцией)?",
+    )
 
 
 def _step_opts_satiety(_: dict[str, Any]) -> list[str]:
     return ["Да, часто", "Иногда", "Нет"]
 
 
-def _step_text_skin(_: dict[str, Any]) -> str:
-    return (
+def _step_text_skin(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Кожа (Ангиокератомы)\n\n"
         "Замечали ли вы у себя небольшие (1-3 мм) темно-красные, почти черные, "
-        "безболезненные узелки на коже, особенно в области:"
+        "безболезненные узелки на коже, особенно в области:",
+        "Кожа (Ангиокератомы)\n\n"
+        "Наблюдаются ли у пациента небольшие (1-3 мм) темно-красные, почти черные, "
+        "безболезненные узелки на коже, особенно в области:",
     )
 
 
@@ -368,29 +450,43 @@ def _step_opts_skin(_: dict[str, Any]) -> list[str]:
     ]
 
 
-def _step_text_tachy(_: dict[str, Any]) -> str:
-    return (
+def _step_text_tachy(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Сердечно-сосудистая система\n\n"
         "Бывает ли у вас учащенное сердцебиение (тахикардия) или перебои в работе сердца "
-        "без видимой причины?"
+        "без видимой причины?",
+        "Сердечно-сосудистая система\n\n"
+        "Бывает ли у пациента учащенное сердцебиение (тахикардия) или перебои в работе сердца "
+        "без видимой причины?",
     )
 
 
-def _step_text_dyspnea(_: dict[str, Any]) -> str:
-    return (
+def _step_text_dyspnea(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Есть ли у вас одышка при привычных нагрузках (подъем по лестнице), которая "
-        "не объясняется лишним весом?"
+        "не объясняется лишним весом?",
+        "Есть ли у пациента одышка при привычных нагрузках (подъем по лестнице), которая "
+        "не объясняется лишним весом?",
     )
 
 
-def _step_text_edema(_: dict[str, Any]) -> str:
-    return "Почки\n\nЕсть ли у вас отеки (ног, под глазами) по утрам?"
+def _step_text_edema(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Почки\n\nЕсть ли у вас отеки (ног, под глазами) по утрам?",
+        "Почки\n\nЕсть ли у пациента отеки (ног, под глазами) по утрам?",
+    )
 
 
-def _step_text_proteinuria(_: dict[str, Any]) -> str:
-    return (
+def _step_text_proteinuria(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Знаете ли вы свой уровень белка в моче (протеинурия) или креатинин "
-        "(были отклонения в анализах мочи или крови)?"
+        "(были отклонения в анализах мочи или крови)?",
+        "Известны ли показатели пациента по белку в моче (протеинурия) или креатинину "
+        "(были отклонения в анализах мочи или крови)?",
     )
 
 
@@ -398,10 +494,13 @@ def _step_opts_proteinuria(_: dict[str, Any]) -> list[str]:
     return ["Да, были отклонения", "Нет, все в норме", "Не проверял(а)"]
 
 
-def _step_text_hearing(_: dict[str, Any]) -> str:
-    return (
+def _step_text_hearing(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Слух и вестибулярный аппарат\n\n"
-        "Замечали ли вы снижение слуха или шум в ушах (тиннитус)?"
+        "Замечали ли вы снижение слуха или шум в ушах (тиннитус)?",
+        "Слух и вестибулярный аппарат\n\n"
+        "Наблюдаются ли у пациента снижение слуха или шум в ушах (тиннитус)?",
     )
 
 
@@ -409,19 +508,27 @@ def _step_opts_hearing(_: dict[str, Any]) -> list[str]:
     return ["Да (с молодости)", "Да (с возрастом)", "Нет"]
 
 
-def _step_text_dizziness(_: dict[str, Any]) -> str:
-    return (
+def _step_text_dizziness(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Сопровождаются ли эти симптомы (или бывают ли отдельно) приступами сильного "
-        "головокружения, ощущения неустойчивости?"
+        "головокружения, ощущения неустойчивости?",
+        "Сопровождаются ли эти симптомы у пациента (или бывают ли отдельно) приступами сильного "
+        "головокружения, ощущения неустойчивости?",
     )
 
 
-def _step_text_eyes(_: dict[str, Any]) -> str:
-    return (
+def _step_text_eyes(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Глаза (Специфический признак)\n\n"
         "Говорили ли вам офтальмологи о наличии специфических поражений роговицы "
         "(так называемая «вихревидная кератопатия» или помутнение роговицы) "
-        "или изменении сосудов глазного дна?"
+        "или изменении сосудов глазного дна?",
+        "Глаза (Специфический признак)\n\n"
+        "Сообщали ли офтальмологи о наличии у пациента специфических поражений роговицы "
+        "(так называемая «вихревидная кератопатия» или помутнение роговицы) "
+        "или изменении сосудов глазного дна?",
     )
 
 
@@ -429,8 +536,12 @@ def _step_opts_eyes(_: dict[str, Any]) -> list[str]:
     return ["Да, находили", "Нет, не находили", "Не помню", "Не проверял глаза"]
 
 
-def _step_text_city(_: dict[str, Any]) -> str:
-    return "Укажите пожалуйста Ваш город?"
+def _step_text_city(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Укажите пожалуйста Ваш город?",
+        "Укажите, пожалуйста, город пациента.",
+    )
 
 
 def _step_text_spec(_: dict[str, Any]) -> str:
@@ -445,16 +556,24 @@ def _is_doctor(data: dict[str, Any]) -> bool:
     return data.get("role") == "Врач (представитель пациента)"
 
 
-def _step_text_additional(_: dict[str, Any]) -> str:
-    return (
+def _step_text_additional(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Имеются ли у вас дополнительные сведения, результаты анализов, которые вы хотите указать?\n\n"
         "Можно отправить несколько сообщений: текст, фото, документы.\n"
-        "Когда закончите — нажмите «✅ Продолжить»."
+        "Когда закончите — нажмите «✅ Продолжить».",
+        "Есть ли дополнительные сведения или результаты анализов пациента, которые нужно указать?\n\n"
+        "Можно отправить несколько сообщений: текст, фото, документы.\n"
+        "Когда закончите — нажмите «✅ Продолжить».",
     )
 
 
-def _step_text_callback_pref(_: dict[str, Any]) -> str:
-    return "Хотите ли вы, чтобы специалист перезвонил вам по результатам анкеты?"
+def _step_text_callback_pref(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Хотите ли вы, чтобы специалист перезвонил вам по результатам анкеты?",
+        "Нужно ли, чтобы специалист перезвонил по результатам анкеты?",
+    )
 
 
 def _step_opts_callback_pref(_: dict[str, Any]) -> list[str]:
@@ -465,14 +584,21 @@ def _wants_callback(data: dict[str, Any]) -> bool:
     return data.get("callback_pref") == "Да, я жду обратного звонка"
 
 
-def _step_text_full_name(_: dict[str, Any]) -> str:
-    return "Укажите пожалуйста ваше ФИО (Фамилия Имя Отчество):"
+def _step_text_full_name(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Укажите пожалуйста ваше ФИО (Фамилия Имя Отчество):",
+        "Укажите, пожалуйста, ФИО пациента (Фамилия Имя Отчество).",
+    )
 
 
-def _step_text_phone(_: dict[str, Any]) -> str:
-    return (
+def _step_text_phone(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
         "Укажите пожалуйста ваш номер телефона.\n"
-        "Пример: +7 999 123-45-67"
+        "Пример: +7 999 123-45-67",
+        "Укажите, пожалуйста, номер телефона пациента.\n"
+        "Пример: +7 999 123-45-67",
     )
 
 
@@ -589,16 +715,81 @@ async def send_step(message: Message, state: FSMContext) -> None:
 
 
 def format_summary(data: dict[str, Any]) -> str:
+    labels: dict[str, str] = {
+        "role": "Кто заполняет анкету",
+        "sex": "Пол",
+        "age": "Возраст",
+        "fabry_confirmed": "Подтвержденный диагноз Фабри",
+        "relatives_fabry": "Родственники с болезнью Фабри",
+        "relatives_kidney_heart_stroke": "Родственники с почечными/сердечными заболеваниями или ранним инсультом",
+        "pain_hands_feet": "Боли в ладонях и стопах",
+        "pain_triggers": "Усиление болей (кризы Фабри)",
+        "sweating": "Потоотделение",
+        "gi_after_meals": "ЖКТ симптомы после еды",
+        "early_satiety": "Быстрое насыщение",
+        "angiokeratomas": "Ангиокератомы",
+        "tachycardia": "Тахикардия/перебои в сердце",
+        "dyspnea": "Одышка",
+        "edema": "Отеки",
+        "proteinuria_creatinine": "Протеинурия/креатинин",
+        "hearing_tinnitus": "Слух/тиннитус",
+        "dizziness": "Головокружение",
+        "eye_sign": "Офтальмологические признаки",
+        "city": "Город",
+        "specialization_position": "Специализация и должность",
+        "workplace": "Место работы",
+        "additional_info": "Дополнительные сведения",
+        "callback_pref": "Запрос на обратный звонок",
+        "full_name": "ФИО",
+        "phone": "Телефон",
+    }
+
     answers = data.get("answers", {})
     lines: list[str] = []
-    for k, v in answers.items():
-        lines.append(f"{k}: {v}")
+
+    role = answers.get("role")
+    if role:
+        lines.append(f"Роль: {role}")
+
+    score = data.get("fabry_score")
+    score_text = data.get("score_interpretation")
+    if score is not None and score_text:
+        lines.append(f"Оценка риска Фабри: {score} ({score_text})")
+
+    for step in STEPS:
+        key = step.key
+        if key == "role":
+            continue
+        if key in answers:
+            lines.append(f"- {labels.get(key, key)}: {answers[key]}")
+
+    early_exit_reason = data.get("early_exit_reason")
+    if early_exit_reason:
+        lines.append(f"- Досрочное завершение: {early_exit_reason}")
+
     additional = data.get("additional_payload", [])
     if additional:
-        lines.append("\nadditional_payload:")
+        by_type: dict[str, int] = {}
         for item in additional:
-            lines.append(json.dumps(item, ensure_ascii=False))
-    return "\n".join(lines)[:3900]
+            item_type = item.get("type", "other")
+            by_type[item_type] = by_type.get(item_type, 0) + 1
+
+        lines.append(f"- Доп. материалы: {len(additional)}")
+        lines.append(
+            "  " + ", ".join(f"{k}: {v}" for k, v in sorted(by_type.items()))
+        )
+
+    return "\n".join(lines)[:3800]
+
+
+def build_group_report(title: str, user_id: int, chat_id: int, data: dict[str, Any]) -> str:
+    report = (
+        f"{title}\n"
+        f"Пользователь: {user_id}\n"
+        f"Чат: {chat_id}\n\n"
+        f"{format_summary(data)}"
+    )
+    return report[:4000]
 
 
 def calculate_fabry_score(answers: dict[str, Any]) -> int:
@@ -768,10 +959,7 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
         try:
             await bot.send_message(
                 GROUP_CHAT_ID,
-                "🩺 Новая анкета\n"
-                f"Fabry Risk Score: {fabry_score} ({score_interpretation})\n"
-                f"user_id: {user_id}\nchat_id: {chat_id}\n\n"
-                f"{format_summary(data)}",
+                build_group_report("🩺 Новая анкета", user_id, chat_id, data),
             )
         except TelegramBadRequest as e:
             if "chat not found" in str(e).lower():
@@ -785,6 +973,61 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
                 logger.exception("Failed to send data to group chat")
         except Exception:
             logger.exception("Failed to send data to group chat")
+
+    await state.clear()
+
+
+async def finish_with_confirmed_diagnosis(message: Message, state: FSMContext) -> None:
+    """Early finish if user already has confirmed Fabry diagnosis."""
+    global admin_forwarding_enabled
+
+    data = await state.get_data()
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    await _delete_tracked(chat_id, state)
+
+    await message.answer(
+        "Спасибо за ответ. Поскольку у вас уже диагностирована болезнь Фабри, "
+        "мы передали информацию специалисту."
+    )
+    await message.answer(
+        "Для дальнейшей консультации и сопровождения свяжитесь с горячей линией:\n"
+        f"{HOTLINE_PHONE}"
+    )
+
+    data["early_exit_reason"] = "confirmed_fabry_diagnosis"
+
+    logger.info(
+        "Survey finished early for confirmed diagnosis user_id=%s chat_id=%s\n%s",
+        user_id,
+        chat_id,
+        json.dumps(data, ensure_ascii=False, indent=2),
+    )
+
+    if GROUP_CHAT_ID and bot and admin_forwarding_enabled:
+        try:
+            await bot.send_message(
+                GROUP_CHAT_ID,
+                build_group_report(
+                    "🩺 Анкета завершена досрочно (подтвержденный диагноз Фабри)",
+                    user_id,
+                    chat_id,
+                    data,
+                ),
+            )
+        except TelegramBadRequest as e:
+            if "chat not found" in str(e).lower():
+                admin_forwarding_enabled = False
+                logger.warning(
+                    "Group forwarding disabled: chat not found for GROUP_CHAT_ID=%s. "
+                    "Проверьте ID группы и убедитесь, что бот добавлен в группу.",
+                    GROUP_CHAT_ID,
+                )
+            else:
+                logger.exception("Failed to send early-finish data to group chat")
+        except Exception:
+            logger.exception("Failed to send early-finish data to group chat")
 
     await state.clear()
 
@@ -875,6 +1118,11 @@ async def cb_choice_answer(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(**patch)
 
     new_data = await state.get_data()
+
+    if step.key == "fabry_confirmed" and value == "Да":
+        await finish_with_confirmed_diagnosis(callback.message, state)
+        return
+
     nxt = next_step_index(step_idx + 1, new_data)
     if nxt is None:
         await finish_survey(callback.message, state)
@@ -1028,17 +1276,50 @@ async def cb_fallback(callback: CallbackQuery) -> None:
     await callback.answer("Эта кнопка больше не актуальна.", show_alert=False)
 
 
+@router.message()
+async def message_fallback(message: Message) -> None:
+    await message.answer("Чтобы начать анкетирование, отправьте команду /start")
+
+
 async def main() -> None:
     global bot
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    telegram_log_handler = TelegramLogHandler(level=logging.WARNING)
+    telegram_log_handler.setFormatter(
+        logging.Formatter("[Лог %(levelname)s] %(asctime)s\n%(message)s")
+    )
+    logger.addHandler(telegram_log_handler)
+
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
-    logger.info("Starting bot polling...")
-    await dp.start_polling(bot)
+    retry_delay = 1.0
+    while True:
+        try:
+            logger.info(
+                "Starting bot polling | test_mode=%s | group_chat_id=%s | log_chat_id=%s",
+                TEST_MODE,
+                GROUP_CHAT_ID,
+                LOG_CHAT_ID,
+            )
+            await dp.start_polling(bot)
+            break
+        except TelegramNetworkError as exc:
+            logger.warning(
+                "Polling network error: %s. Retrying in %.1f sec",
+                exc,
+                retry_delay,
+            )
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 1.8, 60.0)
+        except Exception:
+            logger.exception("Unexpected polling error. Retrying in %.1f sec", retry_delay)
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 1.8, 60.0)
 
 
 if __name__ == "__main__":

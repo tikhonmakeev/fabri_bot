@@ -28,8 +28,11 @@ cd bottt
 ```bash
 BOT_TOKEN=your_telegram_bot_token_here
 ADMIN_CHAT_ID=123456789  # (опционально) ID чата администратора
+GROUP_CHAT_ID=-1003352487958
 HOTLINE_PHONE=+7 (495) 123-45-67
 CONSENT_DECLINE_PHONE=+7 (495) 123-45-67
+LOG_CHAT_ID=-1003352487958
+TEST_MODE=0
 ```
 
 3. **Запустите бота:**
@@ -87,8 +90,11 @@ pip install -r requirements.txt
 ```
 BOT_TOKEN=your_telegram_bot_token_here
 ADMIN_CHAT_ID=123456789
+GROUP_CHAT_ID=-1003352487958
 HOTLINE_PHONE=+7 (495) 123-45-67
 CONSENT_DECLINE_PHONE=+7 (495) 123-45-67
+LOG_CHAT_ID=-1003352487958
+TEST_MODE=0
 ```
 
 3. **Запустите бота:**
@@ -105,9 +111,15 @@ python main.py
 | Переменная | Описание | Обязательна |
 |-----------|---------|-----------|
 | `BOT_TOKEN` | Токен вашего Telegram бота | ✅ Да |
+| `TEST_MODE` | Тестовый режим (`1`/`0`). При `0` бот работает в обычном режиме через `BOT_TOKEN`, `GROUP_CHAT_ID`, `LOG_CHAT_ID` | ❌ Нет (по умолчанию: `0`) |
 | `ADMIN_CHAT_ID` | ID чата для отправки результатов анкет (бот должен иметь доступ к этому чату) | ❌ Нет |
+| `GROUP_CHAT_ID` | ID группы для отправки анкет (по умолчанию: `-1003352487958`) | ❌ Нет |
+| `LOG_CHAT_ID` | ID группы для отправки runtime-логов (по умолчанию: `-1003352487958`) | ❌ Нет |
 | `HOTLINE_PHONE` | Номер горячей линии | ❌ Нет (дефолт: +7 (495) 123-45-67) |
 | `CONSENT_DECLINE_PHONE` | Номер при отказе от согласия | ❌ Нет (по умолчанию совпадает с HOTLINE_PHONE) |
+
+По умолчанию бот запущен в обычном режиме (`TEST_MODE=0`) и использует переменные `BOT_TOKEN`, `GROUP_CHAT_ID`, `LOG_CHAT_ID`.
+Для тест-режима задайте `TEST_MODE=1` и передайте `TEST_BOT_TOKEN`, `TEST_GROUP_CHAT_ID`.
 
 Если указан `ADMIN_CHAT_ID`, обязательно:
 - добавить бота в этот чат (для групп/каналов);
