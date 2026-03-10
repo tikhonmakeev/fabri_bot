@@ -17,7 +17,7 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
@@ -179,6 +179,15 @@ def text_keyboard() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     hotline_keyboard_row(kb)
     return kb
+
+
+def phone_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with 'Share contact' button for the phone step."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
 
 
 def collect_keyboard(step_index: int) -> InlineKeyboardBuilder:
@@ -567,6 +576,15 @@ async def send_step(message: Message, state: FSMContext) -> None:
 
     sent = await message.answer(text, reply_markup=markup)
     track_ids.append(sent.message_id)
+
+    # For the phone step, also show a reply keyboard with "Share contact" button
+    if step.key == "phone":
+        share_msg = await message.answer(
+            "Или нажмите кнопку ниже, чтобы поделиться номером:",
+            reply_markup=phone_reply_keyboard(),
+        )
+        track_ids.append(share_msg.message_id)
+
     await _track_msg(state, *track_ids)
 
 
@@ -881,7 +899,19 @@ async def wrong_input_in_choice(message: Message, state: FSMContext) -> None:
 
 @router.message(SurveyFSM.waiting_text)
 async def text_answer(message: Message, state: FSMContext) -> None:
-    if message.text is None:
+    data = await state.get_data()
+    idx = data.get("step_index", 0)
+    step = step_by_index(idx)
+
+    # Handle shared contact for the phone step
+    if step.key == "phone" and message.contact:
+        phone = message.contact.phone_number
+        if not phone.startswith("+"):
+            phone = f"+{phone}"
+        raw = phone
+    elif message.text is not None:
+        raw = _normalize_spaces(message.text)
+    else:
         sent = await message.answer(
             "Пожалуйста, отправьте ответ текстом.",
             reply_markup=text_keyboard().as_markup(),
@@ -889,11 +919,6 @@ async def text_answer(message: Message, state: FSMContext) -> None:
         await _track_msg(state, message.message_id, sent.message_id)
         return
 
-    data = await state.get_data()
-    idx = data.get("step_index", 0)
-    step = step_by_index(idx)
-
-    raw = _normalize_spaces(message.text)
     if step.validator:
         ok, err = step.validator(raw, data)
         if not ok:
@@ -911,6 +936,11 @@ async def text_answer(message: Message, state: FSMContext) -> None:
     if step.key in ("role", "sex"):
         patch[step.key] = raw
     await state.update_data(**patch)
+
+    # Remove reply keyboard if it was shown (phone step)
+    if step.key == "phone":
+        rm_msg = await message.answer("✓", reply_markup=ReplyKeyboardRemove())
+        await _track_msg(state, rm_msg.message_id)
 
     new_data = await state.get_data()
     nxt = next_step_index(idx + 1, new_data)
