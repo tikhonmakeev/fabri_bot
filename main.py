@@ -17,7 +17,14 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
@@ -142,14 +149,13 @@ def _normalize_spaces(s: str) -> str:
 
 
 def validate_age(text: str, _: dict[str, Any]) -> tuple[bool, str]:
-    t = _normalize_spaces(text)
-    # Strip trailing "лет", "год", "года" etc.
-    cleaned = re.sub(r"\s*(лет|год[а]?)\s*$", "", t, flags=re.IGNORECASE).strip()
-    if not cleaned.isdigit():
-        return False, "Пожалуйста, введите возраст числом (например: 35)."
-    age = int(cleaned)
-    if age < 1 or age > 120:
-        return False, "Пожалуйста, проверьте возраст (допустимый диапазон: 1–120)."
+    # Strict validation: only digits allowed
+    text = text.strip()
+    if not text.isdigit():
+        return False, "Пожалуйста, введите возраст только цифрами (например: 35)."
+    age = int(text)
+    if age < 0 or age > 120:
+        return False, "Пожалуйста, проверьте возраст (допустимый диапазон: 0–120)."
     return True, ""
 
 
@@ -556,6 +562,13 @@ def _is_doctor(data: dict[str, Any]) -> bool:
     return data.get("role") == "Врач (представитель пациента)"
 
 
+def _has_no_fabry_diagnosis(data: dict[str, Any]) -> bool:
+    """Return True if detailed medical questions should be asked.
+    Skip medical questions if Fabry is already confirmed."""
+    answers = data.get("answers", {})
+    return answers.get("fabry_confirmed") != "Да"
+
+
 def _step_text_additional(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
@@ -596,13 +609,15 @@ def _step_text_phone(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
         "Укажите пожалуйста ваш номер телефона.\n"
-        "Пример: +7 999 123-45-67",
+        "Пример: +7XXXXXXXXXX\n\n"
+        "Или нажмите кнопку «Поделиться номером» ниже.",
         "Укажите, пожалуйста, номер телефона пациента.\n"
-        "Пример: +7 999 123-45-67",
+        "Пример: +7XXXXXXXXXX",
     )
 
 
-
+def _should_ask_phone(data: dict[str, Any]) -> bool:
+    return _wants_callback(data)
 
 
 def _should_ask_pain_triggers(data: dict[str, Any]) -> bool:
@@ -627,28 +642,31 @@ STEPS: list[Step] = [
     Step(key="sex", kind="choice", text=_step_text_sex, options=_step_options_sex),
     Step(key="age", kind="text", text=_step_text_age, validator=validate_age),
     Step(key="fabry_confirmed", kind="choice", text=_step_text_genetic, options=_opts_yes_no),
-    Step(key="relatives_fabry", kind="choice", text=_step_text_relatives_dx, options=_opts_yes_no_dk),
-    Step(key="relatives_kidney_heart_stroke", kind="choice", text=_step_text_relatives_kidney_heart_stroke, options=_opts_yes_no_dk),
-    Step(key="pain_hands_feet", kind="choice", text=_step_text_pain, options=_step_opts_pain),
-    Step(key="pain_triggers", kind="choice", text=_step_text_crises, options=_opts_yes_no, condition=_should_ask_pain_triggers),
-    Step(key="sweating", kind="choice", text=_step_text_sweating, options=_step_opts_sweating),
-    Step(key="gi_after_meals", kind="choice", text=_step_text_gi, options=_step_opts_gi),
-    Step(key="early_satiety", kind="choice", text=_step_text_satiety, options=_step_opts_satiety),
-    Step(key="angiokeratomas", kind="choice", text=_step_text_skin, options=_step_opts_skin),
-    Step(key="tachycardia", kind="choice", text=_step_text_tachy, options=_opts_yes_no),
-    Step(key="dyspnea", kind="choice", text=_step_text_dyspnea, options=_opts_yes_no),
-    Step(key="edema", kind="choice", text=_step_text_edema, options=_opts_yes_no),
-    Step(key="proteinuria_creatinine", kind="choice", text=_step_text_proteinuria, options=_step_opts_proteinuria),
-    Step(key="hearing_tinnitus", kind="choice", text=_step_text_hearing, options=_step_opts_hearing),
-    Step(key="dizziness", kind="choice", text=_step_text_dizziness, options=_opts_yes_no),
-    Step(key="eye_sign", kind="choice", text=_step_text_eyes, options=_step_opts_eyes),
+    # Medical questions - skip if Fabry is already confirmed
+    Step(key="relatives_fabry", kind="choice", text=_step_text_relatives_dx, options=_opts_yes_no_dk, condition=_has_no_fabry_diagnosis),
+    Step(key="relatives_kidney_heart_stroke", kind="choice", text=_step_text_relatives_kidney_heart_stroke, options=_opts_yes_no_dk, condition=_has_no_fabry_diagnosis),
+    Step(key="pain_hands_feet", kind="choice", text=_step_text_pain, options=_step_opts_pain, condition=_has_no_fabry_diagnosis),
+    Step(key="pain_triggers", kind="choice", text=_step_text_crises, options=_opts_yes_no, condition=lambda d: _has_no_fabry_diagnosis(d) and _should_ask_pain_triggers(d)),
+    Step(key="sweating", kind="choice", text=_step_text_sweating, options=_step_opts_sweating, condition=_has_no_fabry_diagnosis),
+    Step(key="gi_after_meals", kind="choice", text=_step_text_gi, options=_step_opts_gi, condition=_has_no_fabry_diagnosis),
+    Step(key="early_satiety", kind="choice", text=_step_text_satiety, options=_step_opts_satiety, condition=_has_no_fabry_diagnosis),
+    Step(key="angiokeratomas", kind="choice", text=_step_text_skin, options=_step_opts_skin, condition=_has_no_fabry_diagnosis),
+    Step(key="tachycardia", kind="choice", text=_step_text_tachy, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="dyspnea", kind="choice", text=_step_text_dyspnea, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="edema", kind="choice", text=_step_text_edema, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="proteinuria_creatinine", kind="choice", text=_step_text_proteinuria, options=_step_opts_proteinuria, condition=_has_no_fabry_diagnosis),
+    Step(key="hearing_tinnitus", kind="choice", text=_step_text_hearing, options=_step_opts_hearing, condition=_has_no_fabry_diagnosis),
+    Step(key="dizziness", kind="choice", text=_step_text_dizziness, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="eye_sign", kind="choice", text=_step_text_eyes, options=_step_opts_eyes, condition=_has_no_fabry_diagnosis),
+    # Location and professional info
     Step(key="city", kind="text", text=_step_text_city, validator=validate_nonempty),
     Step(key="specialization_position", kind="text", text=_step_text_spec, condition=_is_doctor, validator=validate_nonempty),
     Step(key="workplace", kind="text", text=_step_text_workplace, condition=_is_doctor, validator=validate_nonempty),
     Step(key="additional_info", kind="collect", text=_step_text_additional),
     Step(key="callback_pref", kind="choice", text=_step_text_callback_pref, options=_step_opts_callback_pref),
+    # Contact info - always collect full name, phone only if callback requested
     Step(key="full_name", kind="text", text=_step_text_full_name, validator=validate_full_name),
-    Step(key="phone", kind="text", text=_step_text_phone, validator=validate_phone),
+    Step(key="phone", kind="text", text=_step_text_phone, condition=_should_ask_phone, validator=validate_phone),
 ]
 
 
@@ -1160,10 +1178,11 @@ async def text_answer(message: Message, state: FSMContext) -> None:
     elif message.text is not None:
         raw = _normalize_spaces(message.text)
     else:
-        sent = await message.answer(
-            "Пожалуйста, отправьте ответ текстом.",
-            reply_markup=text_keyboard().as_markup(),
-        )
+        if step.key == "phone":
+            hint = "Пожалуйста, отправьте номер телефона текстом или нажмите «Поделиться номером»."
+        else:
+            hint = "Пожалуйста, отправьте ответ текстом."
+        sent = await message.answer(hint, reply_markup=text_keyboard().as_markup())
         await _track_msg(state, message.message_id, sent.message_id)
         return
 
