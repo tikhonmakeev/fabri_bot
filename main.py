@@ -330,8 +330,8 @@ def _step_text_age(data: dict[str, Any]) -> str:
 def _step_text_genetic(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
-        "Имеется ли у вас генетически подтвержденный диагноз Болезнь Фабри?",
-        "Имеется ли у вашего пациента генетически подтвержденный диагноз Болезнь Фабри?",
+        "Есть ли у вас генетически подтвержденный диагноз Болезнь Фабри?",
+        "Есть ли у вашего пациента генетически подтвержденный диагноз Болезнь Фабри?",
     )
 
 
@@ -875,11 +875,11 @@ def calculate_fabry_score(answers: dict[str, Any]) -> int:
     
     # Genetic confirmation (most important)
     if answers.get("fabry_confirmed") == "Да":
-        score += 10
+        score += 30
     
     # Family history - Fabry diagnosis
     if answers.get("relatives_fabry") == "Да":
-        score += 5
+        score += 30
     elif answers.get("relatives_fabry") == "Не знаю":
         score += 2
     
@@ -1138,7 +1138,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     welcome = (
         "Здравствуйте!\n\n"
-        "Этот бот помогает провести первичное медицинское анкетирование. "
+        "Этот бот помогает провести первичное анкетирование. "
         "Мы собираем сведения для организации медицинской помощи и связи со специалистом.\n\n"
         "Пожалуйста, подтвердите согласие на обработку персональных данных (ФЗ-152).\n"
         "Вы можете связаться с оператором по горячей линии на любом этапе."
