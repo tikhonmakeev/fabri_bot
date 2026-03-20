@@ -469,7 +469,7 @@ def _step_text_tachy(data: dict[str, Any]) -> str:
 def _step_text_heart_enlargement(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
-        "Вам ставили увеличение объемов сердца?",
+        "Если проходили исследование, Вам ставили увеличение объемов сердца?",
         "Пациенту ставили увеличение объемов сердца (ГКМП)?",
     )
 
