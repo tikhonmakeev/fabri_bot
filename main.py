@@ -295,7 +295,7 @@ def _step_text_role(_: dict[str, Any]) -> str:
 
 
 def _step_options_role(_: dict[str, Any]) -> list[str]:
-    return ["Пациент", "Врач (представитель пациента)"]
+    return ["Пациент", "Врач"]
 
 
 def _step_text_sex(data: dict[str, Any]) -> str:
