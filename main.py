@@ -411,11 +411,9 @@ def _step_text_gi(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
         "Желудочно-кишечный тракт\n\n"
-        "Беспокоят ли вас вздутие живота, диарея или боли в животе сразу после еды, "
-        "особенно жирной?",
+        "Беспокоят ли вас вздутие живота, диарея или боли в животе",
         "Желудочно-кишечный тракт\n\n"
-        "Беспокоят ли пациента вздутие живота, диарея или боли в животе сразу после еды, "
-        "особенно жирной?",
+        "Беспокоят ли пациента вздутие живота, диарея или боли в животе"
     )
 
 
@@ -439,11 +437,11 @@ def _step_text_skin(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
         "Кожа\n\n"
-        "Замечали ли вы у себя небольшие (1-3 мм) темно-красные, почти черные, "
-        "безболезненные узелки на коже, особенно в области:",
+        "Замечали ли вы у себя небольшие (1-3 мм) темно-красные, почти черные "
+        "пятна на коже, выступающие над поверхностность кожи, не вызывающие дискомфорта, не исчезающие при надавливании на элемент, особенно в области:",
         "Кожа (Ангиокератомы)\n\n"
         "Наблюдаются ли у пациента небольшие (1-3 мм) темно-красные, почти черные, "
-        "безболезненные узелки на коже, особенно в области:",
+        "пятна на коже, выступающие над поверхностность кожи, не вызывающие дискомфорта, не исчезающие при надавливании на элемент, особенно в области:",
     )
 
 
@@ -465,6 +463,14 @@ def _step_text_tachy(data: dict[str, Any]) -> str:
         "Сердечно-сосудистая система\n\n"
         "Бывает ли у пациента учащенное сердцебиение (тахикардия) или перебои в работе сердца "
         "без видимой причины?",
+    )
+
+
+def _step_text_heart_enlargement(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Вам ставили увеличение объемов сердца?",
+        "Пациенту ставили увеличение объемов сердца (ГКМП)?",
     )
 
 
@@ -490,9 +496,9 @@ def _step_text_proteinuria(data: dict[str, Any]) -> str:
     return _for_patient_or_self(
         data,
         "Знаете ли вы свой уровень белка в моче или креатинин "
-        "(были отклонения в анализах мочи или крови)?",
+        "(были выявлены отклонения в анализах мочи или крови)?",
         "Известны ли показатели пациента по белку в моче (протеинурия) или креатинину "
-        "(были отклонения в анализах мочи или крови)?",
+        "(были выявлены отклонения в анализах мочи или крови)?",
     )
 
 
@@ -538,6 +544,14 @@ def _step_text_eyes(data: dict[str, Any]) -> str:
     )
 
 
+def _step_text_stroke_tia(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Были ли у вас ранее зафиксированы случаи инсультов или транзиторных ишемических атак (ТИА)?",
+        "Были ли у пациента ранее зафиксированы случаи инсультов или транзиторных ишемических атак (ТИА)?",
+    )
+
+
 def _step_opts_eyes(_: dict[str, Any]) -> list[str]:
     return ["Да, находили", "Нет, не находили", "Не помню", "Не проверял глаза"]
 
@@ -565,6 +579,10 @@ def _is_doctor(data: dict[str, Any]) -> bool:
     role_from_state = _normalize_spaces(str(data.get("role", "")))
     role = role_from_answers or role_from_state
     return role.startswith("Врач")
+
+
+def _is_patient(data: dict[str, Any]) -> bool:
+    return not _is_doctor(data)
 
 
 def _has_no_fabry_diagnosis(data: dict[str, Any]) -> bool:
@@ -607,29 +625,32 @@ def _wants_sms(data: dict[str, Any]) -> bool:
 
 
 def _should_ask_sms_pref(data: dict[str, Any]) -> bool:
-    return not _wants_callback(data)
+    return _is_patient(data) and not _wants_callback(data)
 
 
 def _step_text_full_name(data: dict[str, Any]) -> str:
-    return _for_patient_or_self(
-        data,
-        "Укажите пожалуйста ваше ФИО (Фамилия Имя Отчество):",
-        "Укажите, пожалуйста, ФИО пациента (Фамилия Имя Отчество).",
-    )
+    if _is_doctor(data):
+        return "Укажите, пожалуйста, ФИО врача (Фамилия Имя Отчество)."
+    return "Укажите пожалуйста ваше ФИО (Фамилия Имя Отчество):"
 
 
 def _step_text_phone(data: dict[str, Any]) -> str:
-    return _for_patient_or_self(
-        data,
+    if _is_doctor(data):
+        return (
+            "Укажите, пожалуйста, ваш контактный номер телефона.\n"
+            "Пример: +7XXXXXXXXXX\n\n"
+            "Или нажмите кнопку «Поделиться номером» ниже."
+        )
+    return (
         "Укажите пожалуйста ваш номер телефона.\n"
         "Пример: +7XXXXXXXXXX\n\n"
-        "Или нажмите кнопку «Поделиться номером» ниже.",
-        "Укажите, пожалуйста, номер телефона пациента.\n"
-        "Пример: +7XXXXXXXXXX",
+        "Или нажмите кнопку «Поделиться номером» ниже."
     )
 
 
 def _should_ask_phone(data: dict[str, Any]) -> bool:
+    if _is_doctor(data):
+        return True
     return _wants_callback(data) or _wants_sms(data)
 
 
@@ -665,18 +686,20 @@ STEPS: list[Step] = [
     Step(key="early_satiety", kind="choice", text=_step_text_satiety, options=_step_opts_satiety, condition=_has_no_fabry_diagnosis),
     Step(key="angiokeratomas", kind="choice", text=_step_text_skin, options=_step_opts_skin, condition=_has_no_fabry_diagnosis),
     Step(key="tachycardia", kind="choice", text=_step_text_tachy, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="heart_enlargement", kind="choice", text=_step_text_heart_enlargement, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="dyspnea", kind="choice", text=_step_text_dyspnea, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="edema", kind="choice", text=_step_text_edema, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="proteinuria_creatinine", kind="choice", text=_step_text_proteinuria, options=_step_opts_proteinuria, condition=_has_no_fabry_diagnosis),
     Step(key="hearing_tinnitus", kind="choice", text=_step_text_hearing, options=_step_opts_hearing, condition=_has_no_fabry_diagnosis),
     Step(key="dizziness", kind="choice", text=_step_text_dizziness, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="eye_sign", kind="choice", text=_step_text_eyes, options=_step_opts_eyes, condition=_has_no_fabry_diagnosis),
+    Step(key="stroke_tia_history", kind="choice", text=_step_text_stroke_tia, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     # Location and professional info
     Step(key="city", kind="text", text=_step_text_city, validator=validate_nonempty),
     Step(key="specialization_position", kind="text", text=_step_text_spec, condition=_is_doctor, validator=validate_nonempty),
     Step(key="workplace", kind="text", text=_step_text_workplace, condition=_is_doctor, validator=validate_nonempty),
-    Step(key="additional_info", kind="collect", text=_step_text_additional),
-    Step(key="callback_pref", kind="choice", text=_step_text_callback_pref, options=_step_opts_callback_pref),
+    Step(key="additional_info", kind="collect", text=_step_text_additional, condition=_is_patient),
+    Step(key="callback_pref", kind="choice", text=_step_text_callback_pref, options=_step_opts_callback_pref, condition=_is_patient),
     Step(
         key="sms_pref",
         kind="choice",
@@ -684,7 +707,7 @@ STEPS: list[Step] = [
         options=lambda _: ["Да, хочу получить рекомендацию в СМС", "Нет, не нужно"],
         condition=_should_ask_sms_pref,
     ),
-    # Contact info - always collect full name, phone only if callback or sms requested
+    # Contact info - for doctors always ask doctor full name and contact phone
     Step(key="full_name", kind="text", text=_step_text_full_name, validator=validate_full_name),
     Step(key="phone", kind="text", text=_step_text_phone, condition=_should_ask_phone, validator=validate_phone),
 ]
@@ -767,12 +790,14 @@ def format_summary(data: dict[str, Any]) -> str:
         "early_satiety": "Быстрое насыщение",
         "angiokeratomas": "Ангиокератомы",
         "tachycardia": "Тахикардия/перебои в сердце",
+        "heart_enlargement": "Увеличение объемов сердца (ГКМП)",
         "dyspnea": "Одышка",
         "edema": "Отеки",
         "proteinuria_creatinine": "Протеинурия/креатинин",
         "hearing_tinnitus": "Слух/тиннитус",
         "dizziness": "Головокружение",
         "eye_sign": "Офтальмологические признаки",
+        "stroke_tia_history": "Инсульт/ТИА в анамнезе",
         "city": "Город",
         "specialization_position": "Специализация и должность",
         "workplace": "Место работы",
@@ -804,10 +829,11 @@ def format_summary(data: dict[str, Any]) -> str:
         ("Неврология", ["pain_hands_feet", "pain_triggers", "sweating"]),
         ("Желудочно-кишечный тракт", ["gi_after_meals", "early_satiety"]),
         ("Дерматология", ["angiokeratomas"]),
-        ("Кардиология", ["tachycardia", "dyspnea"]),
+        ("Кардиология", ["tachycardia", "heart_enlargement", "dyspnea"]),
         ("Нефрология", ["edema", "proteinuria_creatinine"]),
         ("ЛОР и вестибулярные симптомы", ["hearing_tinnitus", "dizziness"]),
         ("Офтальмология", ["eye_sign"]),
+        ("Сосудистые события", ["stroke_tia_history"]),
         (
             "Профиль врача",
             ["specialization_position", "workplace"],
@@ -927,6 +953,8 @@ def calculate_fabry_score(answers: dict[str, Any]) -> int:
     # Cardiovascular
     if answers.get("tachycardia") == "Да":
         score += 2
+    if answers.get("heart_enlargement") == "Да":
+        score += 3
     if answers.get("dyspnea") == "Да":
         score += 2
     if answers.get("edema") == "Да":
@@ -952,6 +980,10 @@ def calculate_fabry_score(answers: dict[str, Any]) -> int:
     # Eye findings (corneal involvement - pathognomonic)
     eyes = answers.get("eye_sign")
     if eyes == "Да, находили":
+        score += 4
+
+    # Prior cerebrovascular events
+    if answers.get("stroke_tia_history") == "Да":
         score += 4
     
     return score
@@ -1014,13 +1046,14 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
                 "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
                 "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
                 "Для точной диагностики необходимо направить пациента на генетический анализ и провести анализ уровня фермента альфа-галактозидазы.\n\n"
-                f"Позвоните по телефону горячей линии: {HOTLINE_PHONE} и мы поможем Вам оформить пациента на анализы."
+                f"Наберите на горячую линию: {HOTLINE_PHONE} и получите диагностический конверт."
             )
         else:
             info = (
                 "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
                 "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
-                "Для точной диагностики необходимо направить пациента на генетический анализ и провести анализ уровня фермента альфа-галактозидазы."
+                "Для точной диагностики необходимо направить пациента на генетический анализ и провести анализ уровня фермента альфа-галактозидазы.\n\n"
+                f"Наберите на горячую линию: {HOTLINE_PHONE} и получите диагностический конверт."
             )
     await message.answer(info)
 
