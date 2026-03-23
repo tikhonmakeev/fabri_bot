@@ -43,7 +43,7 @@ docker compose up -d
 
 4. **Проверьте логи:**
 ```bash
-docker compose logs -f
+docker compose logs
 ```
 
 5. **Остановите бота:**
