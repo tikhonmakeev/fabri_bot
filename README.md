@@ -21,7 +21,8 @@
 
 1. **Клонируйте репозиторий:**
 ```bash
-cd bottt
+git clone github.com/Keinedered/fabri_bot
+cd fabri_bot
 ```
 
 2. **Создайте файл `.env`** в корневой папке проекта:
