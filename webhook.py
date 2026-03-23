@@ -18,7 +18,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         if SECRET:
             signature = self.headers.get("X-Hub-Signature-256", "")
-            expected = "sha256=" + hmac.new(
+            expected = "sha256=" + hmac.HMAC(
                 SECRET.encode(), body, hashlib.sha256
             ).hexdigest()
             if not hmac.compare_digest(signature, expected):
@@ -39,4 +39,5 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Listening on :{PORT}")
-    HTTPServer(("0.0.0.0", PORT), WebhookHandler).run_forever()
+    server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
+    server.serve_forever()
