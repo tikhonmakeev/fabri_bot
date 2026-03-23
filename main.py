@@ -59,6 +59,9 @@ LOG_CHAT_ID_RAW = (
     TEST_GROUP_CHAT_ID_RAW if TEST_MODE else os.getenv("LOG_CHAT_ID", "").strip()
 )
 LOG_CHAT_ID: Optional[int] = int(LOG_CHAT_ID_RAW) if LOG_CHAT_ID_RAW else GROUP_CHAT_ID
+FABRY_SCORE_WEIGHTS_PATH = os.path.join(
+    os.path.dirname(__file__), "fabry_score_weights.json"
+)
 
 
 # =========================
@@ -640,7 +643,8 @@ def _should_ask_phone(data: dict[str, Any]) -> bool:
 
 def _should_ask_pain_triggers(data: dict[str, Any]) -> bool:
     """Show pain triggers question only if user has pain (not "Никогда")."""
-    pain = data.get("pain_hands_feet")
+    answers = data.get("answers", {})
+    pain = answers.get("pain_hands_feet")
     return pain is not None and pain != "Никогда"
 
 
@@ -695,6 +699,82 @@ STEPS: list[Step] = [
     Step(key="full_name", kind="text", text=_step_text_full_name, validator=validate_full_name),
     Step(key="phone", kind="text", text=_step_text_phone, condition=_should_ask_phone, validator=validate_phone),
 ]
+
+
+QUESTION_LABELS: dict[str, str] = {
+    "role": "Кто заполняет анкету",
+    "sex": "Пол",
+    "age": "Возраст",
+    "fabry_confirmed": "Подтвержденный диагноз Фабри",
+    "relatives_fabry": "Родственники с болезнью Фабри",
+    "relatives_kidney_heart_stroke": "Родственники с почечными/сердечными заболеваниями или ранним инсультом",
+    "pain_hands_feet": "Боли в ладонях и стопах",
+    "pain_triggers": "Усиление болей (кризы Фабри)",
+    "sweating": "Потоотделение",
+    "gi_after_meals": "ЖКТ симптомы после еды",
+    "early_satiety": "Быстрое насыщение",
+    "angiokeratomas": "Ангиокератомы",
+    "tachycardia": "Тахикардия/перебои в сердце",
+    "heart_enlargement": "Увеличение объемов сердца (ГКМП)",
+    "dyspnea": "Одышка",
+    "edema": "Отеки",
+    "proteinuria_creatinine": "Протеинурия/креатинин",
+    "hearing_tinnitus": "Слух/тиннитус",
+    "dizziness": "Головокружение",
+    "eye_sign": "Офтальмологические признаки",
+    "stroke_tia_history": "Инсульт/ТИА в анамнезе",
+    "city": "Город",
+    "specialization_position": "Специализация и должность",
+    "workplace": "Место работы",
+    "additional_info": "Дополнительные сведения",
+    "callback_pref": "Запрос на обратный звонок",
+    "sms_pref": "Запрос на СМС рекомендацию",
+    "full_name": "ФИО",
+    "phone": "Телефон",
+}
+
+
+def _load_fabry_score_rules() -> dict[str, dict[str, float]]:
+    try:
+        with open(FABRY_SCORE_WEIGHTS_PATH, encoding="utf-8") as fh:
+            raw_rules = json.load(fh)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Failed to read score weights file: {FABRY_SCORE_WEIGHTS_PATH}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Invalid JSON in score weights file: {FABRY_SCORE_WEIGHTS_PATH}"
+        ) from exc
+
+    if not isinstance(raw_rules, dict):
+        raise RuntimeError("Score weights root must be a JSON object.")
+
+    rules: dict[str, dict[str, float]] = {}
+    for question_key, option_scores in raw_rules.items():
+        if isinstance(question_key, str) and question_key.startswith("_"):
+            continue
+
+        if not isinstance(question_key, str) or not isinstance(option_scores, dict):
+            raise RuntimeError("Each score rule must map a question key to an object.")
+
+        normalized_scores: dict[str, float] = {}
+        for option_value, points in option_scores.items():
+            if isinstance(option_value, str) and option_value.startswith("_"):
+                continue
+
+            if not isinstance(option_value, str) or not isinstance(points, (int, float)):
+                raise RuntimeError(
+                    "Each score rule must map string answers to numeric weights."
+                )
+            normalized_scores[option_value] = float(points)
+
+        rules[question_key] = normalized_scores
+
+    return rules
+
+
+FABRY_SCORE_RULES = _load_fabry_score_rules()
 
 
 def next_step_index(start_from: int, data: dict[str, Any]) -> Optional[int]:
@@ -760,38 +840,6 @@ async def send_step(message: Message, state: FSMContext) -> None:
 
 
 def format_summary(data: dict[str, Any]) -> str:
-    labels: dict[str, str] = {
-        "role": "Кто заполняет анкету",
-        "sex": "Пол",
-        "age": "Возраст",
-        "fabry_confirmed": "Подтвержденный диагноз Фабри",
-        "relatives_fabry": "Родственники с болезнью Фабри",
-        "relatives_kidney_heart_stroke": "Родственники с почечными/сердечными заболеваниями или ранним инсультом",
-        "pain_hands_feet": "Боли в ладонях и стопах",
-        "pain_triggers": "Усиление болей (кризы Фабри)",
-        "sweating": "Потоотделение",
-        "gi_after_meals": "ЖКТ симптомы после еды",
-        "early_satiety": "Быстрое насыщение",
-        "angiokeratomas": "Ангиокератомы",
-        "tachycardia": "Тахикардия/перебои в сердце",
-        "heart_enlargement": "Увеличение объемов сердца (ГКМП)",
-        "dyspnea": "Одышка",
-        "edema": "Отеки",
-        "proteinuria_creatinine": "Протеинурия/креатинин",
-        "hearing_tinnitus": "Слух/тиннитус",
-        "dizziness": "Головокружение",
-        "eye_sign": "Офтальмологические признаки",
-        "stroke_tia_history": "Инсульт/ТИА в анамнезе",
-        "city": "Город",
-        "specialization_position": "Специализация и должность",
-        "workplace": "Место работы",
-        "additional_info": "Дополнительные сведения",
-        "callback_pref": "Запрос на обратный звонок",
-        "sms_pref": "Запрос на СМС рекомендацию",
-        "full_name": "ФИО",
-        "phone": "Телефон",
-    }
-
     answers = data.get("answers", {})
     lines: list[str] = []
 
@@ -799,10 +847,19 @@ def format_summary(data: dict[str, Any]) -> str:
     if role:
         lines.append(f"Роль: {role}")
 
+    if data.get("doctor_followup_reason") == "family_history_fabry":
+        lines.append("ВАЖНО: рекомендация выдана по семейному анамнезу")
+
     score = data.get("fabry_score")
     score_text = data.get("score_interpretation")
     if score is not None and score_text:
         lines.append(f"Оценка риска Фабри: {score} ({score_text})")
+
+    score_breakdown = data.get("score_breakdown", [])
+    if score_breakdown:
+        lines.append("Сработавший скоринг:")
+        for item in score_breakdown:
+            lines.append(f"- {item['label']}: {item['answer']} (+{item['points']})")
 
     nosology_blocks: list[tuple[str, list[str]]] = [
         ("Общие данные", ["sex", "age", "city"]),
@@ -833,7 +890,7 @@ def format_summary(data: dict[str, Any]) -> str:
         block_lines: list[str] = []
         for key in keys:
             if key in answers:
-                block_lines.append(f"- {labels.get(key, key)}: {answers[key]}")
+                block_lines.append(f"- {QUESTION_LABELS.get(key, key)}: {answers[key]}")
         if block_lines:
             lines.append(f"\n{title}:")
             lines.extend(block_lines)
@@ -868,123 +925,53 @@ def build_group_report(title: str, user_id: int, chat_id: int, data: dict[str, A
     return report[:4000]
 
 
-def calculate_fabry_score(answers: dict[str, Any]) -> int:
-    """
-    Calculate cumulative Fabry disease risk score based on survey answers.
-    Score indicates likelihood of Fabry disease symptoms.
-    
-    Score interpretation:
-    0-5: Low risk
-    6-15: Moderate risk  
-    16-30: High risk
-    31+: Very high risk
-    (
-    Returns: integer score (0-60+)
-    """
-    score = 0
-    
-    # Genetic confirmation (most important)
-    if answers.get("fabry_confirmed") == "Да":
-        score += 30
-    
-    # Family history - Fabry diagnosis
-    if answers.get("relatives_fabry") == "Да":
-        score += 30
-    elif answers.get("relatives_fabry") == "Не знаю":
-        score += 2
-    
-    # Family history - kidney/heart/stroke
-    if answers.get("relatives_kidney_heart_stroke") == "Да":
-        score += 2
-    elif answers.get("relatives_kidney_heart_stroke") == "Не знаю":
-        score += 1
-    
-    # Neurological pain (acroparesthesia) - early sign
-    pain = answers.get("pain_hands_feet")
-    if pain == "Часто (ежедневно/еженедельно)":
-        score += 5
-    elif pain == "Редко (во время простуды/жары)":
-        score += 2
-    
-    # Pain crisis triggers
-    if answers.get("pain_triggers") == "Да":
-        score += 3
-    
-    # Sweating abnormality (hypohidrosis - early sign)
-    if answers.get("sweating") == "Да, потею очень мало":
-        score += 3
-    elif answers.get("sweating") == "Потею чрезмерно":
-        score += 1
-    
-    # GI symptoms
-    gi = answers.get("gi_after_meals")
-    if gi == "Регулярно, с детства":
-        score += 3
-    elif gi == "Иногда":
-        score += 1
-    
-    # Early satiety
-    if answers.get("early_satiety") == "Да, часто":
-        score += 2
-    elif answers.get("early_satiety") == "Иногда":
-        score += 1
-    
-    # Angiokeratomas (skin - pathognomonic sign)
-    angiokeratomas = answers.get("angiokeratomas")
-    if angiokeratomas and angiokeratomas != "Нет, не замечал(а)":
-        score += 5
-    
-    # Cardiovascular
-    if answers.get("tachycardia") == "Да":
-        score += 2
-    if answers.get("heart_enlargement") == "Да":
-        score += 3
-    if answers.get("dyspnea") == "Да":
-        score += 2
-    if answers.get("edema") == "Да":
-        score += 2
-    
-    # Kidney involvement
-    if answers.get("proteinuria_creatinine") == "Да, были отклонения":
-        score += 3
-    elif answers.get("proteinuria_creatinine") == "Не проверял(а)":
-        score += 0
-    
-    # Hearing and vestibular
-    hearing = answers.get("hearing_tinnitus")
-    if hearing == "Да (с молодости)":
-        score += 3
-    elif hearing == "Да (с возрастом)":
-        score += 1
-    
-    # Dizziness/vertigo
-    if answers.get("dizziness") == "Да":
-        score += 2
-    
-    # Eye findings (corneal involvement - pathognomonic)
-    eyes = answers.get("eye_sign")
-    if eyes == "Да, находили":
-        score += 4
+def calculate_fabry_score_details(
+    answers: dict[str, Any],
+) -> tuple[float, list[dict[str, Any]]]:
+    score = 0.0
+    breakdown: list[dict[str, Any]] = []
 
-    # Prior cerebrovascular events
-    if answers.get("stroke_tia_history") == "Да":
-        score += 4
-    
-    return score
+    for key, option_scores in FABRY_SCORE_RULES.items():
+        answer = answers.get(key)
+        if answer is None:
+            continue
+
+        points = option_scores.get(str(answer), 0)
+        score += points
+
+        if points > 0:
+            breakdown.append(
+                {
+                    "key": key,
+                    "label": QUESTION_LABELS.get(key, key),
+                    "answer": str(answer),
+                    "points": points,
+                }
+            )
+
+    return score, breakdown
 
 
-def get_score_interpretation(score: int) -> str:
+def calculate_fabry_score(answers: dict[str, Any]) -> float:
+    return calculate_fabry_score_details(answers)[0]
+
+
+def _should_recommend_doctor_followup(answers: dict[str, Any]) -> bool:
+    return answers.get("relatives_fabry") == "Да"
+
+
+def get_score_interpretation(score: float) -> str:
     """Get interpretation of Fabry risk score."""
     if score == 0:
-        return "No risk indicators"
+        return "Нет индикаторов риска"
     elif score <= 5:
-        return "Low risk"
+        return "Низкий риск"
     elif score <= 15:
-        return "Moderate risk"
+        return "Умеренный риск"
     elif score <= 30:
-        return "High risk"
+        return "Высокий риск"
     else:
-        return "Very high risk"
+        return "Очень высокий риск"
 
 
 async def finish_survey(message: Message, state: FSMContext) -> None:
@@ -1007,9 +994,19 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
     else:
         await message.answer("Спасибо за ответы! Ваши данные переданы специалисту.")
 
-    role = data.get("role", "Пациент")
-    if role == "Пациент":
-        if wants_callback:
+    answers = data.get("answers", {})
+    fabry_score, score_breakdown = calculate_fabry_score_details(answers)
+    score_interpretation = get_score_interpretation(fabry_score)
+
+    is_doctor = _is_doctor(data)
+    doctor_followup_required = is_doctor and _should_recommend_doctor_followup(answers)
+    if doctor_followup_required:
+        data["doctor_followup_reason"] = "family_history_fabry"
+
+    diagnostics_needed = doctor_followup_required or fabry_score >= 6
+
+    if not is_doctor:
+        if diagnostics_needed and wants_callback:
             info = (
                 "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
                 "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
@@ -1017,15 +1014,39 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
                 "Для точной диагностики необходимо сдать генетический анализ и провести анализ уровня фермента альфа-галактозидазы.\n\n"
                 f"Вы также можете позвонить по телефону горячей линии: {HOTLINE_PHONE}."
             )
-        else:
+        elif diagnostics_needed:
             info = (
                 "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
                 "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
                 "Рекомендуем вам распечатать результаты этого диалога и записаться на прием к врачу-неврологу или генетику.\n\n"
                 "Для точной диагностики необходимо сдать генетический анализ и провести анализ уровня фермента альфа-галактозидазы."
             )
+        elif wants_callback:
+            info = (
+                "По результатам анкеты выраженных признаков болезни Фабри не выявлено.\n\n"
+                "Если хотите уточнить результаты, специалист может связаться с вами по телефону горячей линии."
+            )
+        else:
+            info = (
+                "По результатам анкеты выраженных признаков болезни Фабри не выявлено.\n\n"
+                "При сохранении жалоб обратитесь к врачу для очной консультации."
+            )
     else:
-        if wants_callback:
+        if doctor_followup_required:
+            info = (
+                "У пациента есть кровные родственники с болезнью Фабри.\n\n"
+                "Рекомендуем взять пациента на дальнейшую диагностику независимо от выраженности симптомов. "
+                "Для уточнения диагноза необходимо направить пациента на генетический анализ и провести анализ уровня фермента альфа-галактозидазы.\n\n"
+                f"Наберите на горячую линию: {HOTLINE_PHONE} и получите диагностический конверт."
+            )
+        elif diagnostics_needed and wants_callback:
+            info = (
+                "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
+                "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
+                "Для точной диагностики необходимо направить пациента на генетический анализ и провести анализ уровня фермента альфа-галактозидазы.\n\n"
+                f"Наберите на горячую линию: {HOTLINE_PHONE} и получите диагностический конверт."
+            )
+        elif diagnostics_needed:
             info = (
                 "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
                 "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
@@ -1034,21 +1055,15 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
             )
         else:
             info = (
-                "На основе ваших ответов выявлено сходство некоторых признаков с Болезнью Фабри. "
-                "Болезнь Фабри – это редкое генетическое заболевание.\n\n"
-                "Для точной диагностики необходимо направить пациента на генетический анализ и провести анализ уровня фермента альфа-галактозидазы.\n\n"
-                f"Наберите на горячую линию: {HOTLINE_PHONE} и получите диагностический конверт."
+                "По результатам анкеты выраженных признаков болезни Фабри у пациента не выявлено.\n\n"
+                "Если клиническая картина изменится, рассмотрите повторную оценку или дообследование."
             )
     await message.answer(info)
 
-    # Calculate Fabry disease risk score
-    answers = data.get("answers", {})
-    fabry_score = calculate_fabry_score(answers)
-    score_interpretation = get_score_interpretation(fabry_score)
-    
     # Store score in data
     data["fabry_score"] = fabry_score
     data["score_interpretation"] = score_interpretation
+    data["score_breakdown"] = score_breakdown
     
     user_ident = f"@{username} (ID={user_id})" if username else f"user_id={user_id}"
     contact_parts = [f"callback={'yes' if wants_callback else 'no'}"]
@@ -1108,6 +1123,11 @@ async def finish_with_confirmed_diagnosis(message: Message, state: FSMContext) -
     )
 
     data["early_exit_reason"] = "confirmed_fabry_diagnosis"
+    answers = data.get("answers", {})
+    fabry_score, score_breakdown = calculate_fabry_score_details(answers)
+    data["fabry_score"] = fabry_score
+    data["score_interpretation"] = get_score_interpretation(fabry_score)
+    data["score_breakdown"] = score_breakdown
 
     user_ident = f"@{username} (ID={user_id})" if username else f"user_id={user_id}"
     logger.info(
