@@ -363,11 +363,7 @@ def _step_text_pain(data: dict[str, Any]) -> str:
 
 
 def _step_opts_pain(_: dict[str, Any]) -> list[str]:
-    return [
-        "Никогда",
-        "Редко (во время простуды/жары)",
-        "Часто (ежедневно/еженедельно)",
-    ]
+    return ["Да", "Никогда"]
 
 
 def _step_text_crises(data: dict[str, Any]) -> str:
@@ -391,7 +387,7 @@ def _step_text_sweating(data: dict[str, Any]) -> str:
 
 
 def _step_opts_sweating(_: dict[str, Any]) -> list[str]:
-    return ["Да, потею очень мало", "Потею нормально", "Потею чрезмерно"]
+    return ["Да", "Нет"]
 
 
 def _step_text_gi(data: dict[str, Any]) -> str:
@@ -539,6 +535,22 @@ def _step_text_stroke_tia(data: dict[str, Any]) -> str:
     )
 
 
+def _step_text_myocardial_infarction(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Были ли у вас ранее зафиксированы случаи инфаркта миокарда?",
+        "Были ли у пациента ранее зафиксированы случаи инфаркта миокарда?",
+    )
+
+
+def _step_text_chronic_kidney_disease(data: dict[str, Any]) -> str:
+    return _for_patient_or_self(
+        data,
+        "Имеется ли у вас хроническая болезнь почек (ХБП)?",
+        "Имеется ли у пациента хроническая болезнь почек (ХБП)?",
+    )
+
+
 def _step_opts_eyes(_: dict[str, Any]) -> list[str]:
     return ["Да, находили", "Нет, не находили", "Не помню", "Не проверял глаза"]
 
@@ -645,7 +657,7 @@ def _should_ask_pain_triggers(data: dict[str, Any]) -> bool:
     """Show pain triggers question only if user has pain (not "Никогда")."""
     answers = data.get("answers", {})
     pain = answers.get("pain_hands_feet")
-    return pain is not None and pain != "Никогда"
+    return pain is not None and pain != "Никогда" and pain != "Нет"
 
 
 HOTLINE_REMINDERS: dict[int, str] = {
@@ -676,8 +688,10 @@ STEPS: list[Step] = [
     Step(key="tachycardia", kind="choice", text=_step_text_tachy, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="heart_enlargement", kind="choice", text=_step_text_heart_enlargement, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="dyspnea", kind="choice", text=_step_text_dyspnea, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
+    Step(key="myocardial_infarction", kind="choice", text=_step_text_myocardial_infarction, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="edema", kind="choice", text=_step_text_edema, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="proteinuria_creatinine", kind="choice", text=_step_text_proteinuria, options=_step_opts_proteinuria, condition=_has_no_fabry_diagnosis),
+    Step(key="chronic_kidney_disease", kind="choice", text=_step_text_chronic_kidney_disease, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="hearing_tinnitus", kind="choice", text=_step_text_hearing, options=_step_opts_hearing, condition=_has_no_fabry_diagnosis),
     Step(key="dizziness", kind="choice", text=_step_text_dizziness, options=_opts_yes_no, condition=_has_no_fabry_diagnosis),
     Step(key="eye_sign", kind="choice", text=_step_text_eyes, options=_step_opts_eyes, condition=_has_no_fabry_diagnosis),
@@ -717,8 +731,10 @@ QUESTION_LABELS: dict[str, str] = {
     "tachycardia": "Тахикардия/перебои в сердце",
     "heart_enlargement": "Увеличение объемов сердца (ГКМП)",
     "dyspnea": "Одышка",
+    "myocardial_infarction": "Инфаркт миокарда в анамнезе",
     "edema": "Отеки",
     "proteinuria_creatinine": "Протеинурия/креатинин",
+    "chronic_kidney_disease": "Хроническая болезнь почек (ХБП)",
     "hearing_tinnitus": "Слух/тиннитус",
     "dizziness": "Головокружение",
     "eye_sign": "Офтальмологические признаки",
@@ -870,8 +886,8 @@ def format_summary(data: dict[str, Any]) -> str:
         ("Неврология", ["pain_hands_feet", "pain_triggers", "sweating"]),
         ("Желудочно-кишечный тракт", ["gi_after_meals", "early_satiety"]),
         ("Дерматология", ["angiokeratomas"]),
-        ("Кардиология", ["tachycardia", "heart_enlargement", "dyspnea"]),
-        ("Нефрология", ["edema", "proteinuria_creatinine"]),
+        ("Кардиология", ["tachycardia", "heart_enlargement", "dyspnea", "myocardial_infarction"]),
+        ("Нефрология", ["edema", "proteinuria_creatinine", "chronic_kidney_disease"]),
         ("ЛОР и вестибулярные симптомы", ["hearing_tinnitus", "dizziness"]),
         ("Офтальмология", ["eye_sign"]),
         ("Сосудистые события", ["stroke_tia_history"]),
