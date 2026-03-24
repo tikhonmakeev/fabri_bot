@@ -20,8 +20,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy project code
-COPY main.py .
-COPY .env .
+COPY main.py fabry_score_weights.json .env ./
 
 # Run the bot
 CMD ["python", "main.py"]
