@@ -978,16 +978,9 @@ def _should_recommend_doctor_followup(answers: dict[str, Any]) -> bool:
 
 def get_score_interpretation(score: float) -> str:
     """Get interpretation of Fabry risk score."""
-    if score == 0:
-        return "Нет индикаторов риска"
-    elif score <= 5:
-        return "Низкий риск"
-    elif score <= 15:
-        return "Умеренный риск"
-    elif score <= 30:
-        return "Высокий риск"
-    else:
-        return "Очень высокий риск"
+    if score >= 3:
+        return "Риск выявлен"
+    return "Нет индикаторов риска"
 
 
 async def finish_survey(message: Message, state: FSMContext) -> None:
@@ -1019,7 +1012,7 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
     if doctor_followup_required:
         data["doctor_followup_reason"] = "family_history_fabry"
 
-    diagnostics_needed = doctor_followup_required or fabry_score >= 6
+    diagnostics_needed = doctor_followup_required or fabry_score >= 3
 
     if not is_doctor:
         if diagnostics_needed and wants_callback:
@@ -1096,7 +1089,8 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
         json.dumps(data, ensure_ascii=False, indent=2),
     )
 
-    if GROUP_CHAT_ID and bot and admin_forwarding_enabled:
+    should_forward = is_doctor or fabry_score >= 3
+    if GROUP_CHAT_ID and bot and admin_forwarding_enabled and should_forward:
         try:
             await bot.send_message(
                 GROUP_CHAT_ID,
