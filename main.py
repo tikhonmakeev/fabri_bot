@@ -18,6 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     KeyboardButton,
@@ -27,6 +28,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
+from fpdf import FPDF
 
 
 # =========================
@@ -107,6 +109,7 @@ async def _send_log_to_group(text: str) -> None:
 
 bot: Optional[Bot] = None
 admin_forwarding_enabled = True
+_pdf_data_cache: dict[int, dict[str, Any]] = {}
 
 class SurveyFSM(StatesGroup):
     waiting_consent = State()
@@ -749,6 +752,31 @@ QUESTION_LABELS: dict[str, str] = {
     "phone": "Телефон",
 }
 
+NOSOLOGY_BLOCKS: list[tuple[str, list[str]]] = [
+    ("Общие данные", ["sex", "age", "city"]),
+    (
+        "Генетика и семейный анамнез",
+        ["fabry_confirmed", "relatives_fabry", "relatives_kidney_heart_stroke"],
+    ),
+    ("Неврология", ["pain_hands_feet", "pain_triggers", "sweating"]),
+    ("Желудочно-кишечный тракт", ["gi_after_meals", "early_satiety"]),
+    ("Дерматология", ["angiokeratomas"]),
+    ("Кардиология", ["tachycardia", "heart_enlargement", "dyspnea", "myocardial_infarction"]),
+    ("Нефрология", ["edema", "proteinuria_creatinine", "chronic_kidney_disease"]),
+    ("ЛОР и вестибулярные симптомы", ["hearing_tinnitus", "dizziness"]),
+    ("Офтальмология", ["eye_sign"]),
+    ("Сосудистые события", ["stroke_tia_history"]),
+    (
+        "Профиль врача",
+        ["specialization_position", "workplace"],
+    ),
+    (
+        "Обратная связь и контакты",
+        ["callback_pref", "sms_pref", "full_name", "phone"],
+    ),
+    ("Дополнительные сведения", ["additional_info"]),
+]
+
 
 def _load_fabry_score_rules() -> dict[str, dict[str, float]]:
     try:
@@ -877,32 +905,7 @@ def format_summary(data: dict[str, Any]) -> str:
         for item in score_breakdown:
             lines.append(f"- {item['label']}: {item['answer']} (+{item['points']})")
 
-    nosology_blocks: list[tuple[str, list[str]]] = [
-        ("Общие данные", ["sex", "age", "city"]),
-        (
-            "Генетика и семейный анамнез",
-            ["fabry_confirmed", "relatives_fabry", "relatives_kidney_heart_stroke"],
-        ),
-        ("Неврология", ["pain_hands_feet", "pain_triggers", "sweating"]),
-        ("Желудочно-кишечный тракт", ["gi_after_meals", "early_satiety"]),
-        ("Дерматология", ["angiokeratomas"]),
-        ("Кардиология", ["tachycardia", "heart_enlargement", "dyspnea", "myocardial_infarction"]),
-        ("Нефрология", ["edema", "proteinuria_creatinine", "chronic_kidney_disease"]),
-        ("ЛОР и вестибулярные симптомы", ["hearing_tinnitus", "dizziness"]),
-        ("Офтальмология", ["eye_sign"]),
-        ("Сосудистые события", ["stroke_tia_history"]),
-        (
-            "Профиль врача",
-            ["specialization_position", "workplace"],
-        ),
-        (
-            "Обратная связь и контакты",
-            ["callback_pref", "sms_pref", "full_name", "phone"],
-        ),
-        ("Дополнительные сведения", ["additional_info"]),
-    ]
-
-    for title, keys in nosology_blocks:
+    for title, keys in NOSOLOGY_BLOCKS:
         block_lines: list[str] = []
         for key in keys:
             if key in answers:
@@ -939,6 +942,149 @@ def build_group_report(title: str, user_id: int, chat_id: int, data: dict[str, A
         f"{format_summary(data)}"
     )
     return report[:4000]
+
+
+def _find_dejavu_font() -> str:
+    """Find DejaVuSans.ttf on the system."""
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    raise FileNotFoundError(
+        "DejaVuSans.ttf not found. Install fonts-dejavu-core or place the font next to main.py."
+    )
+
+
+def generate_pdf_report(data: dict[str, Any]) -> bytes:
+    """Generate a PDF report with survey results as a table."""
+    answers = data.get("answers", {})
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    font_path = _find_dejavu_font()
+    pdf.add_font("dejavu", "", font_path)
+    bold_path = font_path.replace("DejaVuSans.ttf", "DejaVuSans-Bold.ttf")
+    if os.path.isfile(bold_path):
+        pdf.add_font("dejavu", "B", bold_path)
+        has_bold = True
+    else:
+        has_bold = False
+
+    # Title
+    pdf.set_font("dejavu", "B" if has_bold else "", 14)
+    pdf.cell(0, 10, "Результаты анкетирования", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("dejavu", "", 11)
+    pdf.cell(0, 7, "Скрининг болезни Фабри", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(3)
+
+    # Date
+    pdf.set_font("dejavu", "", 9)
+    pdf.cell(
+        0, 6,
+        f"Дата формирования: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M')} UTC",
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(3)
+
+    # Risk score
+    score = data.get("fabry_score")
+    score_text = data.get("score_interpretation")
+    if score is not None and score_text:
+        pdf.set_font("dejavu", "B" if has_bold else "", 11)
+        pdf.cell(0, 8, f"Оценка риска Фабри: {score} ({score_text})", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+    # Score breakdown
+    score_breakdown = data.get("score_breakdown", [])
+    if score_breakdown:
+        pdf.set_font("dejavu", "B" if has_bold else "", 10)
+        pdf.cell(0, 7, "Сработавший скоринг:", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("dejavu", "", 9)
+        for item in score_breakdown:
+            pdf.cell(
+                0, 6,
+                f"  {item['label']}: {item['answer']} (+{item['points']})",
+                new_x="LMARGIN", new_y="NEXT",
+            )
+        pdf.ln(3)
+
+    # Role
+    role = answers.get("role")
+    if role:
+        pdf.set_font("dejavu", "", 10)
+        pdf.cell(0, 7, f"Роль: {role}", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+    # Main table by nosology blocks
+    col_label_w = 90
+    col_value_w = 100
+    row_h = 7
+
+    for title, keys in NOSOLOGY_BLOCKS:
+        block_rows = []
+        for key in keys:
+            if key in answers:
+                label = QUESTION_LABELS.get(key, key)
+                value = str(answers[key])
+                block_rows.append((label, value))
+        if not block_rows:
+            continue
+
+        # Check if we need a page break for the header + at least 1 row
+        if pdf.get_y() + row_h * 2 > pdf.h - 20:
+            pdf.add_page()
+
+        # Section header
+        pdf.set_fill_color(200, 215, 235)
+        pdf.set_font("dejavu", "B" if has_bold else "", 10)
+        pdf.cell(col_label_w + col_value_w, row_h, f"  {title}", new_x="LMARGIN", new_y="NEXT", fill=True)
+
+        # Rows
+        pdf.set_font("dejavu", "", 9)
+        for i, (label, value) in enumerate(block_rows):
+            if i % 2 == 0:
+                pdf.set_fill_color(245, 245, 245)
+            else:
+                pdf.set_fill_color(255, 255, 255)
+
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+
+            # Calculate needed height for multi-line value
+            pdf.set_xy(x_start + col_label_w, y_start)
+            value_lines = pdf.multi_cell(col_value_w, row_h, value, split_only=True)
+            needed_h = max(row_h, row_h * len(value_lines))
+
+            if y_start + needed_h > pdf.h - 20:
+                pdf.add_page()
+                x_start = pdf.get_x()
+                y_start = pdf.get_y()
+
+            # Draw label cell
+            pdf.set_xy(x_start, y_start)
+            pdf.cell(col_label_w, needed_h, f"  {label}", fill=True)
+
+            # Draw value cell
+            pdf.set_xy(x_start + col_label_w, y_start)
+            pdf.multi_cell(col_value_w, row_h, value, fill=True)
+
+            pdf.set_xy(x_start, y_start + needed_h)
+
+        pdf.ln(2)
+
+    # Early exit reason
+    early_exit_reason = data.get("early_exit_reason")
+    if early_exit_reason:
+        pdf.set_font("dejavu", "", 10)
+        pdf.cell(0, 7, f"Досрочное завершение: {early_exit_reason}", new_x="LMARGIN", new_y="NEXT")
+
+    return pdf.output()
 
 
 def calculate_fabry_score_details(
@@ -1069,6 +1215,13 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
             )
     await message.answer(info)
 
+    pdf_kb = InlineKeyboardBuilder()
+    pdf_kb.button(text="📄 Получить результаты анкеты в PDF", callback_data="get_pdf")
+    await message.answer(
+        "Вы можете скачать результаты анкетирования в формате PDF:",
+        reply_markup=pdf_kb.as_markup(),
+    )
+
     # Store score in data
     data["fabry_score"] = fabry_score
     data["score_interpretation"] = score_interpretation
@@ -1109,6 +1262,7 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
         except Exception:
             logger.exception("Failed to send data to group chat")
 
+    _pdf_data_cache[user_id] = dict(data)
     await state.clear()
 
 
@@ -1130,6 +1284,13 @@ async def finish_with_confirmed_diagnosis(message: Message, state: FSMContext) -
     await message.answer(
         "Для дальнейшей консультации и сопровождения свяжитесь с горячей линией:\n"
         f"{HOTLINE_PHONE}"
+    )
+
+    pdf_kb = InlineKeyboardBuilder()
+    pdf_kb.button(text="📄 Получить результаты анкеты в PDF", callback_data="get_pdf")
+    await message.answer(
+        "Вы можете скачать результаты анкетирования в формате PDF:",
+        reply_markup=pdf_kb.as_markup(),
     )
 
     data["early_exit_reason"] = "confirmed_fabry_diagnosis"
@@ -1172,6 +1333,7 @@ async def finish_with_confirmed_diagnosis(message: Message, state: FSMContext) -
         except Exception:
             logger.exception("Failed to send early-finish data to group chat")
 
+    _pdf_data_cache[user_id] = dict(data)
     await state.clear()
 
 
@@ -1413,6 +1575,26 @@ async def cb_collect_done(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(step_index=nxt)
     await send_step(callback.message, state)
+
+
+@router.callback_query(F.data == "get_pdf")
+async def cb_get_pdf(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    data = _pdf_data_cache.get(user_id)
+    if not data:
+        await callback.answer(
+            "Результаты не найдены. Пройдите анкету заново (/start).",
+            show_alert=True,
+        )
+        return
+    await callback.answer("Генерация PDF...")
+    try:
+        pdf_bytes = generate_pdf_report(data)
+        pdf_file = BufferedInputFile(pdf_bytes, filename="fabry_screening_results.pdf")
+        await callback.message.answer_document(pdf_file, caption="Результаты анкетирования")
+    except Exception:
+        logger.exception("Failed to generate PDF for user %s", user_id)
+        await callback.message.answer("Произошла ошибка при генерации PDF. Попробуйте позже.")
 
 
 @router.callback_query()
