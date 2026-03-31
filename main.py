@@ -1260,7 +1260,7 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
         except Exception:
             logger.exception("Failed to send data to group chat")
 
-    _pdf_data_cache[user_id] = dict(data)
+    _pdf_data_cache[chat_id] = dict(data)
     await state.clear()
 
 
@@ -1331,7 +1331,7 @@ async def finish_with_confirmed_diagnosis(message: Message, state: FSMContext) -
         except Exception:
             logger.exception("Failed to send early-finish data to group chat")
 
-    _pdf_data_cache[user_id] = dict(data)
+    _pdf_data_cache[chat_id] = dict(data)
     await state.clear()
 
 
@@ -1577,8 +1577,8 @@ async def cb_collect_done(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "get_pdf")
 async def cb_get_pdf(callback: CallbackQuery) -> None:
-    user_id = callback.from_user.id
-    data = _pdf_data_cache.get(user_id)
+    chat_id = callback.message.chat.id
+    data = _pdf_data_cache.get(chat_id)
     if not data:
         await callback.answer(
             "Результаты не найдены. Пройдите анкету заново (/start).",
@@ -1591,7 +1591,7 @@ async def cb_get_pdf(callback: CallbackQuery) -> None:
         pdf_file = BufferedInputFile(pdf_bytes, filename="fabry_screening_results.pdf")
         await callback.message.answer_document(pdf_file, caption="Результаты анкетирования")
     except Exception:
-        logger.exception("Failed to generate PDF for user %s", user_id)
+        logger.exception("Failed to generate PDF for chat %s", chat_id)
         await callback.message.answer("Произошла ошибка при генерации PDF. Попробуйте позже.")
 
 
