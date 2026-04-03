@@ -1,5 +1,5 @@
 services:
-  medical-bot:
+  telegram-bot:
     build: .
     container_name: medical-intake-bot
     restart: always
@@ -9,6 +9,14 @@ services:
       - ./logs:/app/logs
     networks:
       - bot-network
+
+  max-bot:
+    build: .
+    environment:
+      - PLATFORM=max
+      - BOT_TOKEN=${MAX_BOT_TOKEN}
+      - GROUP_CHAT_ID=${MAX_GROUP_CHAT_ID}
+    restart: unless-stopped
 
   webhook:
       image: python:3.11-slim

@@ -11,6 +11,8 @@ from typing import Any, Callable, Literal, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import CommandStart
@@ -44,6 +46,10 @@ TEST_GROUP_CHAT_ID_RAW = os.getenv("TEST_GROUP_CHAT_ID", "").strip()
 BOT_TOKEN = TEST_BOT_TOKEN if TEST_MODE else os.getenv("BOT_TOKEN", "").strip()
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Put it into .env")
+
+# Platform: "telegram" (default) or "max"
+PLATFORM = os.getenv("PLATFORM", "telegram").strip().lower()
+MAX_API_BASE_URL = "https://api.max.buzz"
 
 # Phone number shown when user taps the hotline button (requirement #3)
 HOTLINE_PHONE = os.getenv("HOTLINE_PHONE", "+7 (495) 123-45-67").strip()
@@ -942,6 +948,37 @@ def build_group_report(title: str, user_id: int, chat_id: int, data: dict[str, A
     return report[:4000]
 
 
+def build_survey_result(
+    user_id: int,
+    chat_id: int,
+    username: Optional[str],
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a structured JSON-serializable dict with all survey results.
+
+    This payload is intended for future forwarding to an external service.
+    """
+    answers = data.get("answers", {})
+    score = data.get("fabry_score")
+    score_interpretation = data.get("score_interpretation")
+    score_breakdown = data.get("score_breakdown", [])
+
+    result: dict[str, Any] = {
+        "timestamp_utc": _utc_iso(),
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "username": username,
+        "role": answers.get("role"),
+        "early_exit_reason": data.get("early_exit_reason"),
+        "fabry_score": score,
+        "score_interpretation": score_interpretation,
+        "score_breakdown": score_breakdown,
+        "answers": answers,
+        "additional_payload": data.get("additional_payload", []),
+    }
+    return result
+
+
 def _find_dejavu_font() -> str:
     """Find DejaVuSans.ttf on the system."""
     candidates = [
@@ -1225,6 +1262,14 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
     data["score_interpretation"] = score_interpretation
     data["score_breakdown"] = score_breakdown
     
+    survey_json = build_survey_result(user_id, chat_id, username, data)
+    # TODO: отправить survey_json в внешний сервис
+    logger.info(
+        "Survey result JSON for user_id=%s:\n%s",
+        user_id,
+        json.dumps(survey_json, ensure_ascii=False, indent=2),
+    )
+
     user_ident = f"@{username} (ID={user_id})" if username else f"user_id={user_id}"
     contact_parts = [f"callback={'yes' if wants_callback else 'no'}"]
     if not wants_callback:
@@ -1232,12 +1277,11 @@ async def finish_survey(message: Message, state: FSMContext) -> None:
     contact_pref = " | ".join(contact_parts)
 
     logger.info(
-        "Survey completed for %s | %s | Fabry Risk Score: %s (%s)\n%s",
+        "Survey completed for %s | %s | Fabry Risk Score: %s (%s)",
         user_ident,
         contact_pref,
         fabry_score,
         score_interpretation,
-        json.dumps(data, ensure_ascii=False, indent=2),
     )
 
     should_forward = is_doctor or fabry_score >= 3
@@ -1298,12 +1342,12 @@ async def finish_with_confirmed_diagnosis(message: Message, state: FSMContext) -
     data["score_interpretation"] = get_score_interpretation(fabry_score)
     data["score_breakdown"] = score_breakdown
 
-    user_ident = f"@{username} (ID={user_id})" if username else f"user_id={user_id}"
+    survey_json = build_survey_result(user_id, chat_id, username, data)
+    # TODO: отправить survey_json в внешний сервис
     logger.info(
-        "Survey finished early for confirmed diagnosis %s chat_id=%s\n%s",
-        user_ident,
-        chat_id,
-        json.dumps(data, ensure_ascii=False, indent=2),
+        "Survey result JSON (early exit) for user_id=%s:\n%s",
+        user_id,
+        json.dumps(survey_json, ensure_ascii=False, indent=2),
     )
 
     if GROUP_CHAT_ID and bot and admin_forwarding_enabled:
@@ -1607,9 +1651,16 @@ async def message_fallback(message: Message) -> None:
 
 async def main() -> None:
     global bot
+    session = None
+    if PLATFORM == "max":
+        max_api = TelegramAPIServer.from_base(MAX_API_BASE_URL)
+        session = AiohttpSession(api=max_api)
+        logger.info("Using Max API at %s", MAX_API_BASE_URL)
+
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
     )
 
     telegram_log_handler = TelegramLogHandler(level=logging.WARNING)
@@ -1625,7 +1676,8 @@ async def main() -> None:
     while True:
         try:
             logger.info(
-                "Starting bot polling | test_mode=%s | group_chat_id=%s | log_chat_id=%s",
+                "Starting bot polling | platform=%s | test_mode=%s | group_chat_id=%s | log_chat_id=%s",
+                PLATFORM,
                 TEST_MODE,
                 GROUP_CHAT_ID,
                 LOG_CHAT_ID,
