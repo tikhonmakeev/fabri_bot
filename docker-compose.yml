@@ -1,14 +1,13 @@
 services:
   telegram-bot:
     build: .
-    container_name: medical-intake-bot
-    restart: always
     env_file:
       - .env
     volumes:
       - ./logs:/app/logs
     networks:
       - bot-network
+    restart: unless-stopped
 
   max-bot:
     build: .
