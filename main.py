@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.bot import Bot as AiogramBot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -31,6 +32,20 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 from fpdf import FPDF
+
+
+class MaxBot(AiogramBot):
+    """
+    Bot subclass that bypasses standard Telegram token format validation.
+    Required for Max Messenger (forked Telegram API) where token format may differ.
+    """
+    def __init__(self, token: str, **kwargs):
+        # Save real token directly to __dict__ to bypass property setter validation
+        self.__dict__["token"] = token
+        # Initialize parent with a fake valid token to satisfy internal checks
+        super().__init__(token="123456:fake", **kwargs)
+        # Restore the real token
+        self.__dict__["token"] = token
 
 
 # =========================
@@ -1656,12 +1671,18 @@ async def main() -> None:
         max_api = TelegramAPIServer.from_base(MAX_API_BASE_URL)
         session = AiohttpSession(api=max_api)
         logger.info("Using Max API at %s", MAX_API_BASE_URL)
-        logger.info("Token: %s", BOT_TOKEN)
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        session=session,
-    )
+
+        bot = MaxBot(
+            token=BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            session=session,
+        )
+    else:
+        bot = Bot(
+            token=BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            session=session,
+        )
 
     telegram_log_handler = TelegramLogHandler(level=logging.WARNING)
     telegram_log_handler.setFormatter(
