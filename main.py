@@ -1656,7 +1656,7 @@ async def main() -> None:
         max_api = TelegramAPIServer.from_base(MAX_API_BASE_URL)
         session = AiohttpSession(api=max_api)
         logger.info("Using Max API at %s", MAX_API_BASE_URL)
-
+        logger.info("Token: %s", BOT_TOKEN)
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
