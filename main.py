@@ -64,7 +64,7 @@ if not BOT_TOKEN:
 
 # Platform: "telegram" (default) or "max"
 PLATFORM = os.getenv("PLATFORM", "telegram").strip().lower()
-MAX_API_BASE_URL = "https://api.max.buzz"
+MAX_API_BASE_URL = "http://api.max.buzz"
 
 # Phone number shown when user taps the hotline button (requirement #3)
 HOTLINE_PHONE = os.getenv("HOTLINE_PHONE", "+7 (495) 123-45-67").strip()
