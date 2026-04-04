@@ -10,10 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.bot import Bot as AiogramBot
 from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import CommandStart
@@ -34,20 +31,6 @@ from dotenv import load_dotenv
 from fpdf import FPDF
 
 
-class MaxBot(AiogramBot):
-    """
-    Bot subclass that bypasses standard Telegram token format validation.
-    Required for Max Messenger (forked Telegram API) where token format may differ.
-    """
-    def __init__(self, token: str, **kwargs):
-        # Save real token directly to __dict__ to bypass property setter validation
-        self.__dict__["token"] = token
-        # Initialize parent with a fake valid token to satisfy internal checks
-        super().__init__(token="123456:fake", **kwargs)
-        # Restore the real token
-        self.__dict__["token"] = token
-
-
 # =========================
 # Configuration
 # =========================
@@ -59,12 +42,8 @@ TEST_BOT_TOKEN = os.getenv("TEST_BOT_TOKEN", "").strip()
 TEST_GROUP_CHAT_ID_RAW = os.getenv("TEST_GROUP_CHAT_ID", "").strip()
 
 BOT_TOKEN = TEST_BOT_TOKEN if TEST_MODE else os.getenv("BOT_TOKEN", "").strip()
-if not BOT_TOKEN:
+if not BOT_TOKEN and __name__ == "__main__":
     raise RuntimeError("BOT_TOKEN is not set. Put it into .env")
-
-# Platform: "telegram" (default) or "max"
-PLATFORM = os.getenv("PLATFORM", "telegram").strip().lower()
-MAX_API_BASE_URL = "http://api.max.buzz"
 
 # Phone number shown when user taps the hotline button (requirement #3)
 HOTLINE_PHONE = os.getenv("HOTLINE_PHONE", "+7 (495) 123-45-67").strip()
@@ -1666,23 +1645,10 @@ async def message_fallback(message: Message) -> None:
 
 async def main() -> None:
     global bot
-    session = None
-    if PLATFORM == "max":
-        max_api = TelegramAPIServer.from_base(MAX_API_BASE_URL)
-        session = AiohttpSession(api=max_api)
-        logger.info("Using Max API at %s", MAX_API_BASE_URL)
-
-        bot = MaxBot(
-            token=BOT_TOKEN,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-            session=session,
-        )
-    else:
-        bot = Bot(
-            token=BOT_TOKEN,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-            session=session,
-        )
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
 
     telegram_log_handler = TelegramLogHandler(level=logging.WARNING)
     telegram_log_handler.setFormatter(
@@ -1697,8 +1663,7 @@ async def main() -> None:
     while True:
         try:
             logger.info(
-                "Starting bot polling | platform=%s | test_mode=%s | group_chat_id=%s | log_chat_id=%s",
-                PLATFORM,
+                "Starting bot polling | test_mode=%s | group_chat_id=%s | log_chat_id=%s",
                 TEST_MODE,
                 GROUP_CHAT_ID,
                 LOG_CHAT_ID,
