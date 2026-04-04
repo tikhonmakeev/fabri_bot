@@ -443,12 +443,18 @@ async def cb_consent(event: MessageCallback, context: MemoryContext) -> None:
     if payload == "consent|no":
         await event.answer()
         await context.clear()
+        await context.set_state(SurveyFSM.waiting_consent)
+        reconsent_kb = InlineKeyboardBuilder()
+        reconsent_kb.row(CallbackButton(text="✅ Хорошо, я даю своё согласие", payload="consent|yes"))
+        reconsent_kb.row(CallbackButton(text="📞 Позвонить на горячую линию", payload="hotline"))
         await bot.send_message(
             chat_id=chat_id,
             text=(
                 "К сожалению, без вашего согласия мы не можем продолжить.\n"
-                f"Для получения помощи позвоните на горячую линию: {CONSENT_DECLINE_PHONE}"
+                f"Для получения помощи позвоните на горячую линию: {CONSENT_DECLINE_PHONE}\n\n"
+                "Либо, для продолжения использования бота, дайте свое согласие"
             ),
+            attachments=[reconsent_kb.as_markup()],
         )
         return
 

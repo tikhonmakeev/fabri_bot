@@ -1403,9 +1403,16 @@ async def cb_consent(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data == "consent|no":
         await callback.answer()
         await state.clear()
+        await state.set_state(SurveyFSM.waiting_consent)
+        reconsent_kb = InlineKeyboardBuilder()
+        reconsent_kb.button(text="✅ Хорошо, я даю своё согласие", callback_data="consent|yes")
+        reconsent_kb.adjust(1)
+        hotline_keyboard_row(reconsent_kb)
         await callback.message.answer(
             "К сожалению, без вашего согласия мы не можем продолжить.\n"
-            f"Для получения помощи позвоните на горячую линию: {CONSENT_DECLINE_PHONE}"
+            f"Для получения помощи позвоните на горячую линию: {CONSENT_DECLINE_PHONE}\n\n"
+            "Либо, для продолжения использования бота, дайте свое согласие",
+            reply_markup=reconsent_kb.as_markup(),
         )
         return
 
