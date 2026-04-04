@@ -10,14 +10,12 @@ services:
     restart: unless-stopped
 
   max-bot:
-    build: .
-    env_file:
-      - .env
-    environment:
-      - PLATFORM=max
-      - BOT_TOKEN=${MAX_BOT_TOKEN}
-      - GROUP_CHAT_ID=${MAX_GROUP_CHAT_ID}
-    restart: unless-stopped
+      build:
+        context: .
+        dockerfile: Dockerfile.max
+      env_file:
+        - .env
+      restart: unless-stopped
 
   webhook:
       image: python:3.11-slim
