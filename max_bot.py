@@ -2,7 +2,7 @@
 Max messenger bot for Fabry disease screening questionnaires.
 
 Thin adapter over maxapi that reuses all business logic (STEPS, validators,
-scoring, reports, PDF generation) from main.py.
+scoring, reports, PDF generation) from core.py.
 """
 from __future__ import annotations
 
@@ -24,38 +24,25 @@ from maxapi.types.updates.message_callback import MessageCallback
 from maxapi.types.updates.message_created import MessageCreated
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
-# Import shared business logic from main.py
-from main import (
+# Import shared business logic from core.py (no aiogram dependency)
+from core import (
     CONSENT_DECLINE_PHONE,
     HOTLINE_PHONE,
     HOTLINE_REMINDERS,
-    NOSOLOGY_BLOCKS,
-    QUESTION_LABELS,
     STEPS,
-    _for_patient_or_self,
-    _has_no_fabry_diagnosis,
     _is_doctor,
-    _is_patient,
     _normalize_spaces,
-    _should_ask_pain_triggers,
-    _should_ask_phone,
-    _should_ask_sms_pref,
     _utc_iso,
     _wants_callback,
     _wants_sms,
+    _should_recommend_doctor_followup,
     build_group_report,
     build_survey_result,
     calculate_fabry_score_details,
-    format_summary,
     generate_pdf_report,
     get_score_interpretation,
     next_step_index,
     step_by_index,
-    validate_age,
-    validate_full_name,
-    validate_nonempty,
-    validate_phone,
-    _should_recommend_doctor_followup,
 )
 
 # =========================

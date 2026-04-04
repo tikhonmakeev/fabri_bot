@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-max.txt .
 RUN pip install --no-cache-dir -r requirements-max.txt
 
-# max_bot.py imports business logic from main.py
-COPY main.py max_bot.py fabry_score_weights.json .env ./
+# max_bot.py imports business logic from core.py
+COPY core.py max_bot.py fabry_score_weights.json .env ./
 
 CMD ["python", "max_bot.py"]
